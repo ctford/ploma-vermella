@@ -16,6 +16,18 @@ mcp = FastMCP(
 
 @mcp.tool(
     description=(
+        "List all Google Docs in a Google Drive folder. "
+        "Accepts either a full Drive folder URL or a bare folder ID. "
+        "Returns a list of {id, name, url} — one entry per document."
+    )
+)
+def gdocs_list_folder(folder_id_or_url: str) -> list[dict]:
+    """List all Google Docs in a Drive folder."""
+    return gdocs.list_folder(folder_id_or_url)
+
+
+@mcp.tool(
+    description=(
         "Fetch the full plain-text content of a Google Doc. "
         "Accepts either a full Google Docs URL or a bare document ID. "
         "Returns {title: str, text: str}."

@@ -19,6 +19,7 @@ CLIENT_SECRET = CREDENTIALS_DIR / "client_secret.json"
 TOKEN_FILE = CREDENTIALS_DIR / "token.json"
 
 _DOC_URL_RE = re.compile(r"/document/d/([a-zA-Z0-9_-]+)")
+_FOLDER_URL_RE = re.compile(r"/folders/([a-zA-Z0-9_-]+)")
 
 
 def _extract_doc_id(doc_id_or_url: str) -> str:
@@ -68,6 +69,35 @@ def _extract_text(doc: dict) -> str:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+
+def _extract_folder_id(folder_id_or_url: str) -> str:
+    """Return bare folder ID whether given a full Drive URL or already a bare ID."""
+    m = _FOLDER_URL_RE.search(folder_id_or_url)
+    return m.group(1) if m else folder_id_or_url.strip()
+
+
+def list_folder(folder_id_or_url: str) -> list[dict]:
+    """Return all Google Docs in a Drive folder as [{id, name, url}]."""
+    folder_id = _extract_folder_id(folder_id_or_url)
+    service = _drive_service()
+    result = (
+        service.files()
+        .list(
+            q=f"'{folder_id}' in parents and mimeType='application/vnd.google-apps.document' and trashed=false",
+            fields="files(id, name)",
+            orderBy="name",
+        )
+        .execute()
+    )
+    return [
+        {
+            "id": f["id"],
+            "name": f["name"],
+            "url": f"https://docs.google.com/document/d/{f['id']}",
+        }
+        for f in result.get("files", [])
+    ]
 
 
 def fetch_document(doc_id_or_url: str) -> dict:
