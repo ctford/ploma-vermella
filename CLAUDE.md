@@ -22,11 +22,12 @@ MCP server that reviews Google Doc book chapters and posts feedback as comments.
 ## Review Workflow
 
 When asked to review a chapter:
-1. List the folder to find the document
-2. Fetch the document text
-3. Fetch existing comments to avoid duplicates
-4. Read `context/style_guide.md` and `context/outline.md`
-5. Post one comment per issue — `quoted_text` must be an exact substring of the document
+1. Read `context/folders.md` to find the Drive folder URL (gitignored, user-maintained)
+2. Call `gdocs_list_folder` to list available documents, or use a doc URL/ID directly if given
+3. Call `gdocs_fetch_document` to get the chapter text
+4. Call `gdocs_fetch_comments` to see existing comments — skip any `quoted_text` already commented on
+5. Read `context/style_guide.md` and `context/outline.md` via the Read tool
+6. Post one comment per issue via `gdocs_post_comment` — `quoted_text` must be an exact substring of the document text
 
 ## What Not to Commit
 
