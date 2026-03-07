@@ -156,7 +156,7 @@ def post_comment(doc_id_or_url: str, quoted_text: str, comment: str) -> dict:
             }
 
     body = {
-        "content": comment,
+        "content": f"🪶 {comment}",
         "quotedFileContent": {"mimeType": "text/plain", "value": quoted_text},
     }
     created = _drive_service().comments().create(fileId=doc_id, body=body, fields="id,content,author").execute()
