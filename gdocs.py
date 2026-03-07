@@ -1,6 +1,5 @@
 """Google Docs API logic — fetch content, comments, and post comments."""
 
-import os
 import re
 from pathlib import Path
 
@@ -84,7 +83,11 @@ def list_folder(folder_id_or_url: str) -> list[dict]:
     result = (
         service.files()
         .list(
-            q=f"'{folder_id}' in parents and mimeType='application/vnd.google-apps.document' and trashed=false",
+            q=(
+                f"'{folder_id}' in parents"
+                " and mimeType='application/vnd.google-apps.document'"
+                " and trashed=false"
+            ),
             fields="files(id, name)",
             orderBy="name",
         )
@@ -117,7 +120,11 @@ def fetch_comments(doc_id_or_url: str) -> list[dict]:
     service = _drive_service()
     result = (
         service.comments()
-        .list(fileId=doc_id, fields="comments(id,author,content,quotedFileContent)", includeDeleted=False)
+        .list(
+            fileId=doc_id,
+            fields="comments(id,author,content,quotedFileContent)",
+            includeDeleted=False,
+        )
         .execute()
     )
     comments = []
@@ -159,7 +166,12 @@ def post_comment(doc_id_or_url: str, quoted_text: str, comment: str) -> dict:
         "content": f"🪶 {comment}",
         "quotedFileContent": {"mimeType": "text/plain", "value": quoted_text},
     }
-    created = _drive_service().comments().create(fileId=doc_id, body=body, fields="id,content,author").execute()
+    created = (
+        _drive_service()
+        .comments()
+        .create(fileId=doc_id, body=body, fields="id,content,author")
+        .execute()
+    )
     return {
         "status": "posted",
         "id": created.get("id"),

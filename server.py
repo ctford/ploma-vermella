@@ -1,14 +1,15 @@
 """MCP server exposing Google Docs review tools to Claude Code."""
 
 from fastmcp import FastMCP
+
 import gdocs
 
 mcp = FastMCP(
     name="gdocs",
     instructions=(
         "Tools for fetching Google Docs content and managing comments. "
-        "When reviewing a chapter: fetch the document, fetch existing comments to avoid duplicates, "
-        "read context/style_guide.md and context/outline.md via the Read tool, "
+        "When reviewing a chapter: fetch the document, fetch existing comments to avoid "
+        "duplicates, read context/style_guide.md and context/outline.md via the Read tool, "
         "then post comments for each issue found — skipping passages already commented on."
     ),
 )
@@ -56,7 +57,8 @@ def gdocs_fetch_comments(doc_id_or_url: str) -> list[dict]:
         "Post a review comment anchored to a specific passage in a Google Doc. "
         "Accepts either a full Google Docs URL or a bare document ID. "
         "quoted_text must be an exact substring of the document text. "
-        "Performs a duplicate check: if the same quoted_text already has a comment, returns a no-op. "
+        "Performs a duplicate check: if the same quoted_text already has a comment, "
+        "returns a no-op. "
         "Returns {status: 'posted'|'skipped', ...}."
     )
 )
