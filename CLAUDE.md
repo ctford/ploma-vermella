@@ -26,6 +26,14 @@ When asked to review a chapter:
 4. Read `context/style_guide.md` and `context/outline.md`
 5. Post one comment per issue — `quoted_text` must be an exact substring of the document
 
+## What Not to Commit
+
+Never commit:
+- Anything under `credentials/` (gitignored — OAuth secrets, tokens, URLs)
+- Absolute paths specific to this machine (e.g. `/Users/yourname/...`)
+- Document IDs, folder IDs, or deployment URLs — these belong in `credentials/` or context files
+- API keys or client secrets of any kind
+
 ## Known Limitations
 
 Google Docs does not expose text-anchored comment creation via any public API (Drive API, Docs API, or Apps Script). Comments post to the sidebar with `quotedFileContent` visible but without yellow text highlighting. This is a deliberate Google restriction.
