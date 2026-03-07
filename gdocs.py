@@ -50,6 +50,41 @@ def _drive_service():
     return build("drive", "v3", credentials=_get_credentials())
 
 
+_HEADING_STYLES = {"HEADING_1", "HEADING_2", "HEADING_3", "HEADING_4", "TITLE"}
+
+
+def _paragraph_location(doc: dict, quoted_text: str) -> str:
+    """Return a location string like 'Section 1: p2' for the paragraph containing quoted_text."""
+    current_heading = None
+    para_count = 0
+    needle = quoted_text.strip()
+
+    for element in doc.get("body", {}).get("content", []):
+        paragraph = element.get("paragraph")
+        if not paragraph:
+            continue
+
+        style = paragraph.get("paragraphStyle", {}).get("namedStyleType", "")
+        text = "".join(
+            pe.get("textRun", {}).get("content", "")
+            for pe in paragraph.get("elements", [])
+        ).rstrip("\n")
+
+        if not text:
+            continue
+
+        if style in _HEADING_STYLES:
+            current_heading = text
+            para_count = 0
+        else:
+            para_count += 1
+            if needle in text:
+                prefix = f"{current_heading}: " if current_heading else ""
+                return f"{prefix}p{para_count}"
+
+    return ""
+
+
 def _extract_text(doc: dict) -> str:
     """Extract plain text from a Google Docs document body."""
     parts = []
@@ -162,8 +197,11 @@ def post_comment(doc_id_or_url: str, quoted_text: str, comment: str) -> dict:
                 "existing_comment_id": c["id"],
             }
 
+    doc = _docs_service().documents().get(documentId=doc_id).execute()
+    location = _paragraph_location(doc, quoted_text)
+    prefix = f"{location}: " if location else ""
     body = {
-        "content": f"🪶 {comment}",
+        "content": f"🪶 {prefix}{comment}",
         "quotedFileContent": {"mimeType": "text/plain", "value": quoted_text},
     }
     created = (
