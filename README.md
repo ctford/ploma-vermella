@@ -11,7 +11,8 @@ MCP server for reviewing Google Doc book chapters against a style guide and outl
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .
+pip install -e ".[dev]"
+sh install-hooks.sh
 ```
 
 ### 2. Google Cloud — one-time
@@ -92,18 +93,30 @@ Just edit `context/style_guide.md` and `context/outline.md` directly — no code
 
 ---
 
+## Development
+
+```bash
+pytest tests/ -v        # run tests
+ruff check *.py tests/  # lint
+```
+
+Tests and lint also run automatically as a pre-commit hook (installed via `install-hooks.sh`) and on every push via GitHub Actions.
+
 ## Project structure
 
 ```
 ploma-vermella/
 ├── server.py            # MCP server (FastMCP)
 ├── gdocs.py             # Google Docs / Drive API logic
+├── tests/
+│   └── test_gdocs.py    # unit tests
 ├── context/
 │   ├── style_guide.md   # Prose rules and O'Reilly conventions
 │   └── outline.md       # Chapter-by-chapter outline
 ├── credentials/         # gitignored — OAuth credentials
 │   └── client_secret.json
-├── .gitignore
+├── install-hooks.sh     # installs pre-commit hook
+├── .github/workflows/ci.yml
 ├── pyproject.toml
 └── README.md
 ```

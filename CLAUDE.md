@@ -6,6 +6,8 @@ MCP server that reviews Google Doc book chapters and posts feedback as comments.
 
 - `server.py` — FastMCP server, exposes 4 tools
 - `gdocs.py` — Google Docs/Drive API logic
+- `tests/test_gdocs.py` — unit tests (run with `pytest`, lint with `ruff`)
+- `install-hooks.sh` — installs pre-commit hook that runs tests before each commit
 - `context/style_guide.md` — prose rules (edit to update review criteria)
 - `context/outline.md` — chapter outline (edit to update structure expectations)
 - `credentials/` — gitignored; contains OAuth credentials and token
@@ -41,7 +43,7 @@ Google Docs does not expose text-anchored comment creation via any public API (D
 ## Setup
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate && pip install -e .
+python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]" && sh install-hooks.sh
 ```
 
 Credentials: Google Cloud project with Docs API + Drive API enabled, OAuth 2.0 Desktop credentials saved as `credentials/client_secret.json`. First run opens a browser for authorisation; token cached at `credentials/token.json`.
