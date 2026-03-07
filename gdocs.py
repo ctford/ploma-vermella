@@ -135,13 +135,16 @@ def fetch_comments(doc_id_or_url: str) -> list[dict]:
 
 def post_comment(doc_id_or_url: str, quoted_text: str, comment: str) -> dict:
     """
-    Post a new comment anchored to quoted_text.
+    Post a new comment on the document associated with quoted_text.
+
+    Comments appear in the sidebar with the quoted text visible. Google Docs
+    does not expose an API to create text-highlighted (anchored) comments
+    programmatically — that is locked to the UI.
 
     Does a server-side duplicate check: if quoted_text already appears in
-    an existing comment anchor, returns a no-op result instead of posting.
+    an existing comment, returns a no-op result instead of posting.
     """
     doc_id = _extract_doc_id(doc_id_or_url)
-    service = _drive_service()
 
     existing = fetch_comments(doc_id)
     for c in existing:
@@ -154,12 +157,9 @@ def post_comment(doc_id_or_url: str, quoted_text: str, comment: str) -> dict:
 
     body = {
         "content": comment,
-        "quotedFileContent": {
-            "mimeType": "text/plain",
-            "value": quoted_text,
-        },
+        "quotedFileContent": {"mimeType": "text/plain", "value": quoted_text},
     }
-    created = service.comments().create(fileId=doc_id, body=body, fields="id,content,author").execute()
+    created = _drive_service().comments().create(fileId=doc_id, body=body, fields="id,content,author").execute()
     return {
         "status": "posted",
         "id": created.get("id"),
