@@ -1,4 +1,4 @@
-# ploma-vermella
+# Ploma Vermella
 
 MCP server for reviewing Google Doc book chapters against a style guide and outline, posting feedback as inline comments.
 
