@@ -5,7 +5,7 @@ CLI tool that reviews Google Doc book chapters and posts feedback as comments.
 ## Files
 
 - `pv.py` — Google Docs/Drive API logic and `pv` CLI entry point
-- `tests/test_gdocs.py` — unit tests (run with `pytest`, lint with `ruff`)
+- `tests/test_pv.py` — unit tests (run with `pytest`, lint with `ruff`)
 - `install-hooks.sh` — installs pre-commit hook that runs tests before each commit
 - `context/style_guide.md` — prose rules (edit to update review criteria)
 - `context/outline.md` — chapter outline (edit to update structure expectations)

@@ -58,7 +58,7 @@ Drop any reference material into `context/` — style guide, chapter outline, au
 
 ```bash
 pytest tests/ -v        # run tests
-ruff check gdocs.py tests/  # lint
+ruff check pv.py tests/  # lint
 ```
 
 Tests and lint run automatically as a pre-commit hook and on every push via GitHub Actions.

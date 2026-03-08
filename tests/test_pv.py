@@ -1,4 +1,4 @@
-"""Tests for gdocs.py — pure functions."""
+"""Tests for pv.py — pure functions."""
 
 from pv import (
     _extract_doc_id,
