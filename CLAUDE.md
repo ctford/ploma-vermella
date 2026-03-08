@@ -27,7 +27,7 @@ When asked to review a chapter:
 1. Read `context/folders.md` to find the Drive folder URL (gitignored, user-maintained)
 2. Run `pv list <folder-url>` to list available documents, or use a doc URL/ID directly if given
 3. Run `pv fetch <doc-url>` to get the chapter text
-4. Read `context/style_guide.md` and `context/outline.md` via the Read tool
+4. Read all files in `context/` via the Read tool
 5. For each issue found, run `pv note <doc-url> <quoted-text> <comment>` — `quoted_text` must be an exact substring of the document text
 
 ## What Not to Commit
