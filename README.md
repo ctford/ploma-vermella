@@ -38,9 +38,10 @@ Tell Claude Code in plain English:
 
 Claude will read all files in `context/`, fetch the document, and append a **🪶 Ploma Vermella Review** section at the end of the doc with dated, bulleted, located feedback.
 
-The `pv` CLI is available for direct use:
+The `pv` CLI is available for direct use (with the virtualenv active):
 
 ```bash
+source .venv/bin/activate
 pv list <folder-url>                        # list docs in a Drive folder
 pv fetch <doc-url>                          # fetch title + text of a doc
 pv note <doc-url> <quoted-text> <comment>   # append a review note
