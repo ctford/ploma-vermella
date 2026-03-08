@@ -329,6 +329,12 @@ def append_review_note(doc_id_or_url: str, quoted_text: str, comment: str) -> di
                         "fields": "namedStyleType",
                     }
                 },
+                {
+                    "createParagraphBullets": {
+                        "range": {"startIndex": insert_at, "endIndex": note_end},
+                        "bulletPreset": "BULLET_DISC_CIRCLE_SQUARE",
+                    }
+                },
             ]
         },
     ).execute()
