@@ -1,6 +1,7 @@
 """Google Docs API logic — fetch content, comments, and post comments."""
 
 import re
+from datetime import datetime
 from pathlib import Path
 
 from google.auth.transport.requests import Request
@@ -289,21 +290,36 @@ def append_review_note(doc_id_or_url: str, quoted_text: str, comment: str) -> di
     prefix = f"{location}: " if location else ""
     note_text = f"🪶 {prefix}{comment}\n"
 
-    # ── Create the review heading if needed ──────────────────────────────────
+    # ── Create the review heading + subtitle if needed ───────────────────────
     if not _has_review_section(content):
         insert_at = content[-1]["endIndex"] - 1
         heading_text = f"\n{_REVIEW_HEADING}\n"
+        subtitle_text = f"{datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
         h_start = insert_at + 1  # skip leading \n
         h_end = h_start + _utf16_len(_REVIEW_HEADING) + 1  # +1 for trailing \n
+        s_start = h_end
+        s_end = s_start + _utf16_len(subtitle_text)
         service.documents().batchUpdate(
             documentId=doc_id,
             body={
                 "requests": [
-                    {"insertText": {"location": {"index": insert_at}, "text": heading_text}},
+                    {
+                        "insertText": {
+                            "location": {"index": insert_at},
+                            "text": heading_text + subtitle_text,
+                        }
+                    },
                     {
                         "updateParagraphStyle": {
                             "range": {"startIndex": h_start, "endIndex": h_end},
-                            "paragraphStyle": {"namedStyleType": "HEADING_1"},
+                            "paragraphStyle": {"namedStyleType": "TITLE"},
+                            "fields": "namedStyleType",
+                        }
+                    },
+                    {
+                        "updateParagraphStyle": {
+                            "range": {"startIndex": s_start, "endIndex": s_end},
+                            "paragraphStyle": {"namedStyleType": "SUBTITLE"},
                             "fields": "namedStyleType",
                         }
                     },
