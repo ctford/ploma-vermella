@@ -148,13 +148,26 @@ def list_folder(folder_id_or_url: str) -> list[dict]:
 
 
 def fetch_document(doc_id_or_url: str) -> dict:
-    """Return {title, text} for the given Google Doc."""
+    """Return {title, text, comments} for the given Google Doc."""
     doc_id = _extract_doc_id(doc_id_or_url)
-    service = _docs_service()
-    doc = service.documents().get(documentId=doc_id).execute()
+    doc = _docs_service().documents().get(documentId=doc_id).execute()
+    result = _drive_service().comments().list(
+        fileId=doc_id,
+        fields="comments(author,content,quotedFileContent)",
+        includeDeleted=False,
+    ).execute()
+    comments = [
+        {
+            "author": c.get("author", {}).get("displayName", ""),
+            "content": c.get("content", ""),
+            "quoted_text": c.get("quotedFileContent", {}).get("value", ""),
+        }
+        for c in result.get("comments", [])
+    ]
     return {
         "title": doc.get("title", ""),
         "text": _extract_text(doc),
+        "comments": comments,
     }
 
 
