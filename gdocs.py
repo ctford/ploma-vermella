@@ -1,6 +1,9 @@
 """Google Docs API logic — fetch content, comments, and post comments."""
 
+import argparse
+import json
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -418,3 +421,70 @@ def post_comment(doc_id_or_url: str, quoted_text: str, comment: str) -> dict:
         "content": created.get("content"),
         "author": created.get("author", {}).get("displayName", ""),
     }
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="pv",
+        description="Ploma Vermella — Google Docs review tool.",
+    )
+    sub = parser.add_subparsers(dest="command", metavar="COMMAND")
+    sub.required = True
+
+    sub.add_parser("list", help="List all Google Docs in a Drive folder.").add_argument(
+        "folder", metavar="FOLDER_URL"
+    )
+
+    sub.add_parser("fetch", help="Fetch the title and text of a Google Doc.").add_argument(
+        "doc", metavar="DOC_URL"
+    )
+
+    sub.add_parser("comments", help="List existing comments on a Google Doc.").add_argument(
+        "doc", metavar="DOC_URL"
+    )
+
+    p_comment = sub.add_parser("comment", help="Post a sidebar comment anchored to a passage.")
+    p_comment.add_argument("doc", metavar="DOC_URL")
+    p_comment.add_argument("quoted_text", metavar="QUOTED_TEXT",
+                           help="Exact substring of the document to anchor the comment to.")
+    p_comment.add_argument("comment", metavar="COMMENT", help="Comment text to post.")
+
+    p_note = sub.add_parser(
+        "note", help="Append a review note to the Ploma Vermella Review section."
+    )
+    p_note.add_argument("doc", metavar="DOC_URL")
+    p_note.add_argument("quoted_text", metavar="QUOTED_TEXT",
+                        help="Exact substring used to determine the note's location.")
+    p_note.add_argument("comment", metavar="COMMENT", help="Note text to append.")
+
+    return parser
+
+
+def main() -> None:
+    parser = _build_parser()
+    args = parser.parse_args()
+
+    if args.command == "list":
+        result = list_folder(args.folder)
+    elif args.command == "fetch":
+        result = fetch_document(args.doc)
+    elif args.command == "comments":
+        result = fetch_comments(args.doc)
+    elif args.command == "comment":
+        result = post_comment(args.doc, args.quoted_text, args.comment)
+    elif args.command == "note":
+        result = append_review_note(args.doc, args.quoted_text, args.comment)
+    else:
+        parser.print_help()
+        sys.exit(1)
+
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()

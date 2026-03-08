@@ -1,14 +1,16 @@
 [project]
 name = "ploma-vermella"
 version = "0.1.0"
-description = "Book chapter review MCP server for Google Docs"
+description = "Book chapter review CLI for Google Docs"
 requires-python = ">=3.11"
 dependencies = [
-    "fastmcp>=2.0",
     "google-api-python-client>=2.0",
     "google-auth-oauthlib>=1.0",
     "google-auth-httplib2>=0.2",
 ]
+
+[project.scripts]
+pv = "gdocs:main"
 
 [build-system]
 requires = ["hatchling"]
