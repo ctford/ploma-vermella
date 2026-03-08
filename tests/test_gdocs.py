@@ -6,7 +6,11 @@ from gdocs import (
     _extract_doc_id,
     _extract_folder_id,
     _extract_text,
+    _find_section_for_text,
+    _is_fresh_tab,
     _paragraph_location,
+    _section_end_index,
+    _tab_has_heading,
     post_comment,
 )
 
@@ -200,6 +204,112 @@ def test_post_comment_prefixes_quill_emoji():
 
     call_body = mock_drive.comments().create.call_args[1]["body"]
     assert call_body["content"].startswith("🪶 ")
+
+# ---------------------------------------------------------------------------
+# Tab helpers
+# ---------------------------------------------------------------------------
+
+_TAB_CONTENT_FRESH = [
+    {"sectionBreak": {}, "startIndex": 0, "endIndex": 1},
+    {
+        "paragraph": {
+            "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+            "elements": [{"textRun": {"content": "\n"}}],
+        },
+        "startIndex": 1,
+        "endIndex": 2,
+    },
+]
+
+_TAB_CONTENT_WITH_HEADING = [
+    {"sectionBreak": {}, "startIndex": 0, "endIndex": 1},
+    {
+        "paragraph": {
+            "paragraphStyle": {"namedStyleType": "TITLE"},
+            "elements": [{"textRun": {"content": "Ploma Vermella\n"}}],
+        },
+        "startIndex": 1,
+        "endIndex": 16,
+    },
+    {
+        "paragraph": {
+            "paragraphStyle": {"namedStyleType": "HEADING_1"},
+            "elements": [{"textRun": {"content": "Introduction\n"}}],
+        },
+        "startIndex": 16,
+        "endIndex": 29,
+    },
+    {
+        "paragraph": {
+            "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+            "elements": [{"textRun": {"content": "A note.\n"}}],
+        },
+        "startIndex": 29,
+        "endIndex": 37,
+    },
+    {
+        "paragraph": {
+            "paragraphStyle": {"namedStyleType": "HEADING_1"},
+            "elements": [{"textRun": {"content": "Methods\n"}}],
+        },
+        "startIndex": 37,
+        "endIndex": 45,
+    },
+    {
+        "paragraph": {
+            "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+            "elements": [{"textRun": {"content": "\n"}}],
+        },
+        "startIndex": 45,
+        "endIndex": 46,
+    },
+]
+
+
+def test_is_fresh_tab_true():
+    assert _is_fresh_tab(_TAB_CONTENT_FRESH) is True
+
+
+def test_is_fresh_tab_false():
+    assert _is_fresh_tab(_TAB_CONTENT_WITH_HEADING) is False
+
+
+def test_tab_has_heading_found():
+    assert _tab_has_heading(_TAB_CONTENT_WITH_HEADING, "Introduction") is True
+
+
+def test_tab_has_heading_not_found():
+    assert _tab_has_heading(_TAB_CONTENT_WITH_HEADING, "Conclusion") is False
+
+
+def test_section_end_index_before_next_heading():
+    # "Introduction" section ends at index 37 (start of "Methods" heading)
+    assert _section_end_index(_TAB_CONTENT_WITH_HEADING, "Introduction") == 37
+
+
+def test_section_end_index_last_section():
+    # "Methods" is the last heading — falls back to end of content
+    result = _section_end_index(_TAB_CONTENT_WITH_HEADING, "Methods")
+    assert result == 45  # endIndex of last element minus 1
+
+
+def test_find_section_for_text_found():
+    content = STRUCTURED_DOC["body"]["content"]
+    assert _find_section_for_text(content, "First body paragraph.") == "Introduction"
+
+
+def test_find_section_for_text_different_section():
+    content = STRUCTURED_DOC["body"]["content"]
+    assert _find_section_for_text(content, "First methods paragraph.") == "Methods"
+
+
+def test_find_section_for_text_not_found():
+    content = STRUCTURED_DOC["body"]["content"]
+    assert _find_section_for_text(content, "Nonexistent text") is None
+
+
+# ---------------------------------------------------------------------------
+
 
 def test_post_comment_includes_location():
     mock_drive = MagicMock()

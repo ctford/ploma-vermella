@@ -67,5 +67,21 @@ def gdocs_post_comment(doc_id_or_url: str, quoted_text: str, comment: str) -> di
     return gdocs.post_comment(doc_id_or_url, quoted_text, comment)
 
 
+@mcp.tool(
+    description=(
+        "Append a review note to the '🪶 Ploma Vermella' review tab of a Google Doc. "
+        "Creates the tab if it doesn't exist; initialises it with a Title and today's date. "
+        "Notes are grouped under the same section heading as in the main document. "
+        "Each note is automatically prefixed with its paragraph location (e.g. 'Section 1: p2'). "
+        "Accepts either a full Google Docs URL or a bare document ID. "
+        "quoted_text must be an exact substring of the document — used to determine location only. "
+        "Returns {status, location, note, tab}."
+    )
+)
+def gdocs_add_review_note(doc_id_or_url: str, quoted_text: str, comment: str) -> dict:
+    """Append a located review note to the Ploma Vermella Review section."""
+    return gdocs.append_review_note(doc_id_or_url, quoted_text, comment)
+
+
 if __name__ == "__main__":
     mcp.run()

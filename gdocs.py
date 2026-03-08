@@ -1,6 +1,7 @@
 """Google Docs API logic — fetch content, comments, and post comments."""
 
 import re
+from datetime import datetime
 from pathlib import Path
 
 from google.auth.transport.requests import Request
@@ -51,6 +52,12 @@ def _drive_service():
 
 
 _HEADING_STYLES = {"HEADING_1", "HEADING_2", "HEADING_3", "HEADING_4", "TITLE"}
+_TAB_TITLE = "🪶 Ploma Vermella"
+
+
+def _utf16_len(s: str) -> int:
+    """Length of s in UTF-16 code units (the unit the Docs API uses for indices)."""
+    return sum(2 if ord(c) > 0xFFFF else 1 for c in s)
 
 
 def _paragraph_location(doc: dict, quoted_text: str) -> str:
@@ -98,6 +105,105 @@ def _extract_text(doc: dict) -> str:
             if text_run:
                 parts.append(text_run.get("content", ""))
     return "".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Tab-based review helpers
+# ---------------------------------------------------------------------------
+
+
+def _get_review_tab(doc: dict) -> dict | None:
+    """Return the review tab dict or None."""
+    for tab in doc.get("tabs", []):
+        if tab.get("tabProperties", {}).get("title") == _TAB_TITLE:
+            return tab
+    return None
+
+
+def _tab_content(tab: dict) -> list:
+    """Return the body content list from a tab."""
+    return tab.get("documentTab", {}).get("body", {}).get("content", [])
+
+
+def _tab_end_index(content: list) -> int:
+    """Return the insert index just before the required final newline."""
+    return content[-1]["endIndex"] - 1 if content else 1
+
+
+def _is_fresh_tab(content: list) -> bool:
+    """True if the tab has no meaningful text content."""
+    for el in content:
+        para = el.get("paragraph")
+        if not para:
+            continue
+        text = "".join(
+            pe.get("textRun", {}).get("content", "")
+            for pe in para.get("elements", [])
+        ).strip()
+        if text:
+            return False
+    return True
+
+
+def _tab_has_heading(content: list, heading_text: str) -> bool:
+    """Return True if content already contains a heading matching heading_text."""
+    for el in content:
+        para = el.get("paragraph", {})
+        if para.get("paragraphStyle", {}).get("namedStyleType") in _HEADING_STYLES:
+            text = "".join(
+                pe.get("textRun", {}).get("content", "")
+                for pe in para.get("elements", [])
+            ).strip()
+            if text == heading_text:
+                return True
+    return False
+
+
+def _section_end_index(content: list, heading_text: str) -> int:
+    """Return the index at which to append content at the end of the named section.
+
+    Scans forward from the matching heading; stops at the next heading or end of content.
+    """
+    in_section = False
+    for el in content:
+        para = el.get("paragraph")
+        if not para:
+            continue
+        style = para.get("paragraphStyle", {}).get("namedStyleType", "")
+        text = "".join(
+            pe.get("textRun", {}).get("content", "")
+            for pe in para.get("elements", [])
+        ).strip()
+
+        if in_section and style in _HEADING_STYLES:
+            return el["startIndex"]
+
+        if not in_section and style in _HEADING_STYLES and text == heading_text:
+            in_section = True
+
+    return _tab_end_index(content)
+
+
+def _find_section_for_text(content: list, quoted_text: str) -> str | None:
+    """Return the heading text of the section containing quoted_text."""
+    current_heading = None
+    needle = quoted_text.strip()
+    for el in content:
+        paragraph = el.get("paragraph")
+        if not paragraph:
+            continue
+        style = paragraph.get("paragraphStyle", {}).get("namedStyleType", "")
+        text = "".join(
+            pe.get("textRun", {}).get("content", "")
+            for pe in paragraph.get("elements", [])
+        ).rstrip("\n")
+        if not text:
+            continue
+        if style in _HEADING_STYLES:
+            current_heading = text
+        elif needle in text:
+            return current_heading
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +279,152 @@ def fetch_comments(doc_id_or_url: str) -> list[dict]:
             }
         )
     return comments
+
+
+def append_review_note(doc_id_or_url: str, quoted_text: str, comment: str) -> dict:
+    """
+    Append a review note to the '🪶 Ploma Vermella' review tab, creating the tab if
+    it doesn't exist yet.
+
+    On first use the tab gets a Title ('Ploma Vermella') and a Subtitle with today's date.
+    Notes are grouped under the same section heading as in the main document.
+    Each note is prefixed with its paragraph location (e.g. 'Section 1: p2').
+    """
+    doc_id = _extract_doc_id(doc_id_or_url)
+    service = _docs_service()
+
+    # Fetch with tabs so we can read both main body and existing review tab.
+    doc = service.documents().get(documentId=doc_id, includeTabsContent=True).execute()
+
+    # Main body lives in the first tab when includeTabsContent=True.
+    tabs = doc.get("tabs", [])
+    main_content = (
+        tabs[0].get("documentTab", {}).get("body", {}).get("content", [])
+        if tabs
+        else doc.get("body", {}).get("content", [])
+    )
+    main_doc = {"body": {"content": main_content}}
+
+    section_heading = _find_section_for_text(main_content, quoted_text)
+    location = _paragraph_location(main_doc, quoted_text)
+    prefix = f"{location}: " if location else ""
+    note_text = f"🪶 {prefix}{comment}\n"
+
+    # ── Create review tab if needed ──────────────────────────────────────────
+    tab = _get_review_tab(doc)
+    if tab is None:
+        service.documents().batchUpdate(
+            documentId=doc_id,
+            body={"requests": [{"createTab": {"tabProperties": {"title": _TAB_TITLE}}}]},
+        ).execute()
+        doc = service.documents().get(documentId=doc_id, includeTabsContent=True).execute()
+        tab = _get_review_tab(doc)
+
+    tab_id = tab["tabProperties"]["tabId"]
+    content = _tab_content(tab)
+
+    # ── Initialise fresh tab with title + subtitle ────────────────────────────
+    if _is_fresh_tab(content):
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        title_text = "Ploma Vermella\n"
+        subtitle_text = f"Reviewed: {date_str}\n"
+        insert_at = _tab_end_index(content)
+        t_end = insert_at + _utf16_len(title_text)
+        s_end = t_end + _utf16_len(subtitle_text)
+        service.documents().batchUpdate(
+            documentId=doc_id,
+            body={
+                "requests": [
+                    {
+                        "insertText": {
+                            "location": {"index": insert_at, "tabId": tab_id},
+                            "text": title_text + subtitle_text,
+                        }
+                    },
+                    {
+                        "updateParagraphStyle": {
+                            "range": {"startIndex": insert_at, "endIndex": t_end, "tabId": tab_id},
+                            "paragraphStyle": {"namedStyleType": "TITLE"},
+                            "fields": "namedStyleType",
+                        }
+                    },
+                    {
+                        "updateParagraphStyle": {
+                            "range": {"startIndex": t_end, "endIndex": s_end, "tabId": tab_id},
+                            "paragraphStyle": {"namedStyleType": "SUBTITLE"},
+                            "fields": "namedStyleType",
+                        }
+                    },
+                ]
+            },
+        ).execute()
+        doc = service.documents().get(documentId=doc_id, includeTabsContent=True).execute()
+        tab = _get_review_tab(doc)
+        content = _tab_content(tab)
+
+    # ── Add section heading in review tab if missing ─────────────────────────
+    if section_heading and not _tab_has_heading(content, section_heading):
+        insert_at = _tab_end_index(content)
+        heading_text = f"{section_heading}\n"
+        h_end = insert_at + _utf16_len(heading_text)
+        service.documents().batchUpdate(
+            documentId=doc_id,
+            body={
+                "requests": [
+                    {
+                        "insertText": {
+                            "location": {"index": insert_at, "tabId": tab_id},
+                            "text": heading_text,
+                        }
+                    },
+                    {
+                        "updateParagraphStyle": {
+                            "range": {"startIndex": insert_at, "endIndex": h_end, "tabId": tab_id},
+                            "paragraphStyle": {"namedStyleType": "HEADING_1"},
+                            "fields": "namedStyleType",
+                        }
+                    },
+                ]
+            },
+        ).execute()
+        doc = service.documents().get(documentId=doc_id, includeTabsContent=True).execute()
+        tab = _get_review_tab(doc)
+        content = _tab_content(tab)
+
+    # ── Insert the note ───────────────────────────────────────────────────────
+    if section_heading and _tab_has_heading(content, section_heading):
+        insert_at = _section_end_index(content, section_heading)
+    else:
+        insert_at = _tab_end_index(content)
+
+    note_end = insert_at + _utf16_len(note_text)
+    service.documents().batchUpdate(
+        documentId=doc_id,
+        body={
+            "requests": [
+                {
+                    "insertText": {
+                        "location": {"index": insert_at, "tabId": tab_id},
+                        "text": note_text,
+                    }
+                },
+                {
+                    "updateParagraphStyle": {
+                        "range": {"startIndex": insert_at, "endIndex": note_end, "tabId": tab_id},
+                        "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                        "fields": "namedStyleType",
+                    }
+                },
+            ]
+        },
+    ).execute()
+
+    return {
+        "status": "added",
+        "location": location or "(none)",
+        "note": note_text.strip(),
+        "tab": _TAB_TITLE,
+    }
 
 
 def post_comment(doc_id_or_url: str, quoted_text: str, comment: str) -> dict:
