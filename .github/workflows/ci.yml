@@ -15,5 +15,5 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[dev]"
-      - run: ruff check gdocs.py tests/
+      - run: ruff check pv.py tests/
       - run: pytest tests/ -v

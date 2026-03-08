@@ -1,6 +1,6 @@
 """Tests for gdocs.py — pure functions."""
 
-from gdocs import (
+from pv import (
     _extract_doc_id,
     _extract_folder_id,
     _extract_text,

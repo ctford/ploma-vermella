@@ -3,7 +3,7 @@ cat > .git/hooks/pre-commit << 'EOF'
 #!/bin/sh
 set -e
 source .venv/bin/activate
-ruff check gdocs.py tests/
+ruff check pv.py tests/
 pytest tests/ -q
 EOF
 chmod +x .git/hooks/pre-commit

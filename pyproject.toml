@@ -10,7 +10,7 @@ dependencies = [
 ]
 
 [project.scripts]
-pv = "gdocs:main"
+pv = "pv:main"
 
 [build-system]
 requires = ["hatchling"]
