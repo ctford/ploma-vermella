@@ -82,6 +82,9 @@ def _paragraph_location(doc: dict, quoted_text: str) -> str:
         if not text:
             continue
 
+        if text == _REVIEW_HEADING:
+            break
+
         if style in _HEADING_STYLES:
             current_heading = text
             para_count = 0
@@ -95,13 +98,19 @@ def _paragraph_location(doc: dict, quoted_text: str) -> str:
 
 
 def _extract_text(doc: dict) -> str:
-    """Extract plain text from a Google Docs document body."""
+    """Extract plain text from a Google Docs document body, stopping before the review section."""
     parts = []
     body = doc.get("body", {})
     for element in body.get("content", []):
         paragraph = element.get("paragraph")
         if not paragraph:
             continue
+        text = "".join(
+            pe.get("textRun", {}).get("content", "")
+            for pe in paragraph.get("elements", [])
+        ).rstrip("\n")
+        if text == _REVIEW_HEADING:
+            break
         for pe in paragraph.get("elements", []):
             text_run = pe.get("textRun")
             if text_run:
@@ -211,7 +220,6 @@ def append_review_note(doc_id_or_url: str, quoted_text: str, comment: str) -> di
     prefix = f"{location}: " if location else ""
     note_text = f"🪶 {prefix}{comment}\n"
 
-    # ── Create the review heading + subtitle if not present ───────────────────
     # ── Create heading + subtitle if section doesn't exist yet ───────────────
     has_section = any(
         "".join(

@@ -71,6 +71,14 @@ def test_extract_text_skips_non_paragraph_elements():
 def test_extract_text_empty_doc():
     assert _extract_text({}) == ""
 
+def test_extract_text_stops_at_review_heading():
+    doc = {"body": {"content": [
+        {"paragraph": {"elements": [{"textRun": {"content": "Chapter text.\n"}}]}},
+        {"paragraph": {"elements": [{"textRun": {"content": "🪶 Ploma Vermella Review\n"}}]}},
+        {"paragraph": {"elements": [{"textRun": {"content": "Review note.\n"}}]}},
+    ]}}
+    assert _extract_text(doc) == "Chapter text.\n"
+
 
 # ---------------------------------------------------------------------------
 # _paragraph_location
@@ -139,3 +147,20 @@ def test_paragraph_location_no_heading():
         "elements": [{"textRun": {"content": "Orphan paragraph.\n"}}],
     }}]}}
     assert _paragraph_location(doc, "Orphan paragraph.") == "p1"
+
+def test_paragraph_location_stops_at_review_heading():
+    doc = {"body": {"content": [
+        {"paragraph": {
+            "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+            "elements": [{"textRun": {"content": "Body text.\n"}}],
+        }},
+        {"paragraph": {
+            "paragraphStyle": {"namedStyleType": "TITLE"},
+            "elements": [{"textRun": {"content": "🪶 Ploma Vermella Review\n"}}],
+        }},
+        {"paragraph": {
+            "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+            "elements": [{"textRun": {"content": "Note inside review.\n"}}],
+        }},
+    ]}}
+    assert _paragraph_location(doc, "Note inside review.") == ""
