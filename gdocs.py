@@ -3,7 +3,6 @@
 import argparse
 import json
 import re
-import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -111,26 +110,6 @@ def _extract_text(doc: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Review-section helpers (body-based)
-# ---------------------------------------------------------------------------
-
-
-def _has_review_section(content: list) -> bool:
-    """Return True if the document already has a Ploma Vermella Review heading."""
-    for el in content:
-        para = el.get("paragraph", {})
-        if para.get("paragraphStyle", {}).get("namedStyleType") in _HEADING_STYLES:
-            text = "".join(
-                pe.get("textRun", {}).get("content", "")
-                for pe in para.get("elements", [])
-            ).strip()
-            if text == _REVIEW_HEADING:
-                return True
-    return False
-
-
-
-# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -179,11 +158,10 @@ def fetch_document(doc_id_or_url: str) -> dict:
     }
 
 
-
 def append_review_note(doc_id_or_url: str, quoted_text: str, comment: str) -> dict:
     """
     Append a review note to the '🪶 Ploma Vermella Review' section at the end of the
-    document, creating the H1 heading if it doesn't exist yet.
+    document. Replaces the section entirely on each call (Title + Subtitle + notes).
 
     Each note is prefixed with its paragraph location (e.g. 'Section 1: p2').
     """
@@ -216,44 +194,43 @@ def append_review_note(doc_id_or_url: str, quoted_text: str, comment: str) -> di
             break
 
     # ── Create the review heading + subtitle ─────────────────────────────────
-    if not _has_review_section(content):
-        insert_at = content[-1]["endIndex"] - 1
-        heading_text = f"\n{_REVIEW_HEADING}\n"
-        subtitle_text = f"{datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
-        h_start = insert_at + 1  # skip leading \n
-        h_end = h_start + _utf16_len(_REVIEW_HEADING) + 1  # +1 for trailing \n
-        s_start = h_end
-        s_end = s_start + _utf16_len(subtitle_text)
-        service.documents().batchUpdate(
-            documentId=doc_id,
-            body={
-                "requests": [
-                    {
-                        "insertText": {
-                            "location": {"index": insert_at},
-                            "text": heading_text + subtitle_text,
-                        }
-                    },
-                    {
-                        "updateParagraphStyle": {
-                            "range": {"startIndex": h_start, "endIndex": h_end},
-                            "paragraphStyle": {"namedStyleType": "TITLE"},
-                            "fields": "namedStyleType",
-                        }
-                    },
-                    {
-                        "updateParagraphStyle": {
-                            "range": {"startIndex": s_start, "endIndex": s_end},
-                            "paragraphStyle": {"namedStyleType": "SUBTITLE"},
-                            "fields": "namedStyleType",
-                        }
-                    },
-                ]
-            },
-        ).execute()
-        # Re-fetch to get updated indices before inserting the note
-        doc = service.documents().get(documentId=doc_id).execute()
-        content = doc.get("body", {}).get("content", [])
+    insert_at = content[-1]["endIndex"] - 1
+    heading_text = f"\n{_REVIEW_HEADING}\n"
+    subtitle_text = f"{datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
+    h_start = insert_at + 1  # skip leading \n
+    h_end = h_start + _utf16_len(_REVIEW_HEADING) + 1  # +1 for trailing \n
+    s_start = h_end
+    s_end = s_start + _utf16_len(subtitle_text)
+    service.documents().batchUpdate(
+        documentId=doc_id,
+        body={
+            "requests": [
+                {
+                    "insertText": {
+                        "location": {"index": insert_at},
+                        "text": heading_text + subtitle_text,
+                    }
+                },
+                {
+                    "updateParagraphStyle": {
+                        "range": {"startIndex": h_start, "endIndex": h_end},
+                        "paragraphStyle": {"namedStyleType": "TITLE"},
+                        "fields": "namedStyleType",
+                    }
+                },
+                {
+                    "updateParagraphStyle": {
+                        "range": {"startIndex": s_start, "endIndex": s_end},
+                        "paragraphStyle": {"namedStyleType": "SUBTITLE"},
+                        "fields": "namedStyleType",
+                    }
+                },
+            ]
+        },
+    ).execute()
+    # Re-fetch to get updated indices before inserting the note
+    doc = service.documents().get(documentId=doc_id).execute()
+    content = doc.get("body", {}).get("content", [])
 
     # ── Append the note at end of document ───────────────────────────────────
     insert_at = content[-1]["endIndex"] - 1
@@ -281,7 +258,6 @@ def append_review_note(doc_id_or_url: str, quoted_text: str, comment: str) -> di
     ).execute()
 
     return {"status": "added", "location": location or "(none)", "note": note_text.strip()}
-
 
 
 # ---------------------------------------------------------------------------
@@ -324,11 +300,8 @@ def main() -> None:
         result = list_folder(args.folder)
     elif args.command == "fetch":
         result = fetch_document(args.doc)
-    elif args.command == "note":
-        result = append_review_note(args.doc, args.quoted_text, args.comment)
     else:
-        parser.print_help()
-        sys.exit(1)
+        result = append_review_note(args.doc, args.quoted_text, args.comment)
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
