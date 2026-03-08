@@ -290,7 +290,26 @@ def append_review_note(doc_id_or_url: str, quoted_text: str, comment: str) -> di
     prefix = f"{location}: " if location else ""
     note_text = f"🪶 {prefix}{comment}\n"
 
-    # ── Create the review heading + subtitle if needed ───────────────────────
+    # ── Replace any existing review section ──────────────────────────────────
+    for el in content:
+        para = el.get("paragraph", {})
+        text = "".join(
+            pe.get("textRun", {}).get("content", "")
+            for pe in para.get("elements", [])
+        ).strip()
+        if text == _REVIEW_HEADING:
+            end = content[-1]["endIndex"] - 1
+            service.documents().batchUpdate(
+                documentId=doc_id,
+                body={"requests": [{"deleteContentRange": {
+                    "range": {"startIndex": el["startIndex"], "endIndex": end}
+                }}]},
+            ).execute()
+            doc = service.documents().get(documentId=doc_id).execute()
+            content = doc.get("body", {}).get("content", [])
+            break
+
+    # ── Create the review heading + subtitle ─────────────────────────────────
     if not _has_review_section(content):
         insert_at = content[-1]["endIndex"] - 1
         heading_text = f"\n{_REVIEW_HEADING}\n"
