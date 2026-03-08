@@ -1,4 +1,4 @@
-"""Google Docs API logic — fetch content, comments, and post comments."""
+"""Google Docs API logic — fetch document content and write review notes."""
 
 import argparse
 import json
@@ -129,78 +129,6 @@ def _has_review_section(content: list) -> bool:
     return False
 
 
-def _is_fresh_tab(content: list) -> bool:
-    """True if the tab has no meaningful text content."""
-    for el in content:
-        para = el.get("paragraph")
-        if not para:
-            continue
-        text = "".join(
-            pe.get("textRun", {}).get("content", "")
-            for pe in para.get("elements", [])
-        ).strip()
-        if text:
-            return False
-    return True
-
-
-def _tab_has_heading(content: list, heading_text: str) -> bool:
-    """Return True if content already contains a heading matching heading_text."""
-    for el in content:
-        para = el.get("paragraph", {})
-        if para.get("paragraphStyle", {}).get("namedStyleType") in _HEADING_STYLES:
-            text = "".join(
-                pe.get("textRun", {}).get("content", "")
-                for pe in para.get("elements", [])
-            ).strip()
-            if text == heading_text:
-                return True
-    return False
-
-
-def _section_end_index(content: list, heading_text: str) -> int:
-    """Return the index at which to append content at the end of the named section."""
-    in_section = False
-    for el in content:
-        para = el.get("paragraph")
-        if not para:
-            continue
-        style = para.get("paragraphStyle", {}).get("namedStyleType", "")
-        text = "".join(
-            pe.get("textRun", {}).get("content", "")
-            for pe in para.get("elements", [])
-        ).strip()
-
-        if in_section and style in _HEADING_STYLES:
-            return el["startIndex"]
-
-        if not in_section and style in _HEADING_STYLES and text == heading_text:
-            in_section = True
-
-    return content[-1]["endIndex"] - 1 if content else 1
-
-
-def _find_section_for_text(content: list, quoted_text: str) -> str | None:
-    """Return the heading text of the section containing quoted_text."""
-    current_heading = None
-    needle = quoted_text.strip()
-    for el in content:
-        paragraph = el.get("paragraph")
-        if not paragraph:
-            continue
-        style = paragraph.get("paragraphStyle", {}).get("namedStyleType", "")
-        text = "".join(
-            pe.get("textRun", {}).get("content", "")
-            for pe in paragraph.get("elements", [])
-        ).rstrip("\n")
-        if not text:
-            continue
-        if style in _HEADING_STYLES:
-            current_heading = text
-        elif needle in text:
-            return current_heading
-    return None
-
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -250,31 +178,6 @@ def fetch_document(doc_id_or_url: str) -> dict:
         "text": _extract_text(doc),
     }
 
-
-def fetch_comments(doc_id_or_url: str) -> list[dict]:
-    """Return existing comments as [{id, author, content, quoted_text}]."""
-    doc_id = _extract_doc_id(doc_id_or_url)
-    service = _drive_service()
-    result = (
-        service.comments()
-        .list(
-            fileId=doc_id,
-            fields="comments(id,author,content,quotedFileContent)",
-            includeDeleted=False,
-        )
-        .execute()
-    )
-    comments = []
-    for c in result.get("comments", []):
-        comments.append(
-            {
-                "id": c.get("id"),
-                "author": c.get("author", {}).get("displayName", ""),
-                "content": c.get("content", ""),
-                "quoted_text": c.get("quotedFileContent", {}).get("value", ""),
-            }
-        )
-    return comments
 
 
 def append_review_note(doc_id_or_url: str, quoted_text: str, comment: str) -> dict:
@@ -380,48 +283,6 @@ def append_review_note(doc_id_or_url: str, quoted_text: str, comment: str) -> di
     return {"status": "added", "location": location or "(none)", "note": note_text.strip()}
 
 
-def post_comment(doc_id_or_url: str, quoted_text: str, comment: str) -> dict:
-    """
-    Post a new comment on the document associated with quoted_text.
-
-    Comments appear in the sidebar with the quoted text visible. Google Docs
-    does not expose an API to create text-highlighted (anchored) comments
-    programmatically — that is locked to the UI.
-
-    Does a server-side duplicate check: if quoted_text already appears in
-    an existing comment, returns a no-op result instead of posting.
-    """
-    doc_id = _extract_doc_id(doc_id_or_url)
-
-    existing = fetch_comments(doc_id)
-    for c in existing:
-        if c["quoted_text"].strip() == quoted_text.strip():
-            return {
-                "status": "skipped",
-                "reason": "quoted_text already has a comment",
-                "existing_comment_id": c["id"],
-            }
-
-    doc = _docs_service().documents().get(documentId=doc_id).execute()
-    location = _paragraph_location(doc, quoted_text)
-    prefix = f"{location}: " if location else ""
-    body = {
-        "content": f"🪶 {prefix}{comment}",
-        "quotedFileContent": {"mimeType": "text/plain", "value": quoted_text},
-    }
-    created = (
-        _drive_service()
-        .comments()
-        .create(fileId=doc_id, body=body, fields="id,content,author")
-        .execute()
-    )
-    return {
-        "status": "posted",
-        "id": created.get("id"),
-        "content": created.get("content"),
-        "author": created.get("author", {}).get("displayName", ""),
-    }
-
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -444,16 +305,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "doc", metavar="DOC_URL"
     )
 
-    sub.add_parser("comments", help="List existing comments on a Google Doc.").add_argument(
-        "doc", metavar="DOC_URL"
-    )
-
-    p_comment = sub.add_parser("comment", help="Post a sidebar comment anchored to a passage.")
-    p_comment.add_argument("doc", metavar="DOC_URL")
-    p_comment.add_argument("quoted_text", metavar="QUOTED_TEXT",
-                           help="Exact substring of the document to anchor the comment to.")
-    p_comment.add_argument("comment", metavar="COMMENT", help="Comment text to post.")
-
     p_note = sub.add_parser(
         "note", help="Append a review note to the Ploma Vermella Review section."
     )
@@ -473,10 +324,6 @@ def main() -> None:
         result = list_folder(args.folder)
     elif args.command == "fetch":
         result = fetch_document(args.doc)
-    elif args.command == "comments":
-        result = fetch_comments(args.doc)
-    elif args.command == "comment":
-        result = post_comment(args.doc, args.quoted_text, args.comment)
     elif args.command == "note":
         result = append_review_note(args.doc, args.quoted_text, args.comment)
     else:

@@ -14,11 +14,9 @@ CLI tool that reviews Google Doc book chapters and posts feedback as comments.
 ## CLI (`pv`)
 
 ```
-pv list <folder-url>                          # list docs in a Drive folder
-pv fetch <doc-url>                            # fetch title + text of a doc
-pv comments <doc-url>                         # list existing comments
-pv comment <doc-url> <quoted-text> <comment>  # post a sidebar comment
-pv note <doc-url> <quoted-text> <comment>     # append to the review section
+pv list <folder-url>                         # list docs in a Drive folder
+pv fetch <doc-url>                           # fetch title + text of a doc
+pv note <doc-url> <quoted-text> <comment>    # append to the review section
 ```
 
 All commands output JSON. Use `pv -h` or `pv <command> -h` for help.
@@ -29,10 +27,8 @@ When asked to review a chapter:
 1. Read `context/folders.md` to find the Drive folder URL (gitignored, user-maintained)
 2. Run `pv list <folder-url>` to list available documents, or use a doc URL/ID directly if given
 3. Run `pv fetch <doc-url>` to get the chapter text
-4. Run `pv comments <doc-url>` to see existing comments — skip any `quoted_text` already commented on
-5. Read `context/style_guide.md` and `context/outline.md` via the Read tool
-6. For each issue found, run `pv comment <doc-url> <quoted-text> <comment>` — `quoted_text` must be an exact substring of the document text
-7. Run `pv note` once per issue to also append it to the in-document review section
+4. Read `context/style_guide.md` and `context/outline.md` via the Read tool
+5. For each issue found, run `pv note <doc-url> <quoted-text> <comment>` — `quoted_text` must be an exact substring of the document text
 
 ## What Not to Commit
 
