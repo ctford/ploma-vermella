@@ -28,7 +28,8 @@ When asked to review a chapter:
 2. Run `pv list <folder-url>` to list available documents, or use a doc URL/ID directly if given
 3. Run `pv fetch <doc-url>` to get the chapter text and any existing comments
 4. Read all files in `context/` via the Read tool
-5. For each issue found, run `pv note <doc-url> <quoted-text> <comment>` — `quoted_text` must be an exact substring of the document text
+5. Run `pv clear <doc-url>` to remove any previous review section
+6. For each issue found, run `pv note <doc-url> <quoted-text> <comment>` — `quoted_text` must be an exact substring of the document text
 
 ## What Not to Commit
 

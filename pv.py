@@ -171,23 +171,12 @@ def fetch_document(doc_id_or_url: str) -> dict:
     }
 
 
-def append_review_note(doc_id_or_url: str, quoted_text: str, comment: str) -> dict:
-    """
-    Append a review note to the '🪶 Ploma Vermella Review' section at the end of the
-    document. Replaces the section entirely on each call (Title + Subtitle + notes).
-
-    Each note is prefixed with its paragraph location (e.g. 'Section 1: p2').
-    """
+def clear_review_section(doc_id_or_url: str) -> dict:
+    """Delete the '🪶 Ploma Vermella Review' section if it exists."""
     doc_id = _extract_doc_id(doc_id_or_url)
     service = _docs_service()
     doc = service.documents().get(documentId=doc_id).execute()
     content = doc.get("body", {}).get("content", [])
-
-    location = _paragraph_location(doc, quoted_text)
-    prefix = f"{location}: " if location else ""
-    note_text = f"🪶 {prefix}{comment}\n"
-
-    # ── Replace any existing review section ──────────────────────────────────
     for el in content:
         para = el.get("paragraph", {})
         text = "".join(
@@ -202,48 +191,73 @@ def append_review_note(doc_id_or_url: str, quoted_text: str, comment: str) -> di
                     "range": {"startIndex": el["startIndex"], "endIndex": end}
                 }}]},
             ).execute()
-            doc = service.documents().get(documentId=doc_id).execute()
-            content = doc.get("body", {}).get("content", [])
-            break
+            return {"status": "cleared"}
+    return {"status": "nothing_to_clear"}
 
-    # ── Create the review heading + subtitle ─────────────────────────────────
-    insert_at = content[-1]["endIndex"] - 1
-    heading_text = f"\n{_REVIEW_HEADING}\n"
-    subtitle_text = f"{datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
-    h_start = insert_at + 1  # skip leading \n
-    h_end = h_start + _utf16_len(_REVIEW_HEADING) + 1  # +1 for trailing \n
-    s_start = h_end
-    s_end = s_start + _utf16_len(subtitle_text)
-    service.documents().batchUpdate(
-        documentId=doc_id,
-        body={
-            "requests": [
-                {
-                    "insertText": {
-                        "location": {"index": insert_at},
-                        "text": heading_text + subtitle_text,
-                    }
-                },
-                {
-                    "updateParagraphStyle": {
-                        "range": {"startIndex": h_start, "endIndex": h_end},
-                        "paragraphStyle": {"namedStyleType": "TITLE"},
-                        "fields": "namedStyleType",
-                    }
-                },
-                {
-                    "updateParagraphStyle": {
-                        "range": {"startIndex": s_start, "endIndex": s_end},
-                        "paragraphStyle": {"namedStyleType": "SUBTITLE"},
-                        "fields": "namedStyleType",
-                    }
-                },
-            ]
-        },
-    ).execute()
-    # Re-fetch to get updated indices before inserting the note
+
+def append_review_note(doc_id_or_url: str, quoted_text: str, comment: str) -> dict:
+    """
+    Append a review note to the '🪶 Ploma Vermella Review' section at the end of the
+    document, creating the section (Title + Subtitle) if it doesn't exist yet.
+
+    Each note is prefixed with its paragraph location (e.g. 'Section 1: p2').
+    """
+    doc_id = _extract_doc_id(doc_id_or_url)
+    service = _docs_service()
     doc = service.documents().get(documentId=doc_id).execute()
     content = doc.get("body", {}).get("content", [])
+
+    location = _paragraph_location(doc, quoted_text)
+    prefix = f"{location}: " if location else ""
+    note_text = f"🪶 {prefix}{comment}\n"
+
+    # ── Create the review heading + subtitle if not present ───────────────────
+    # ── Create heading + subtitle if section doesn't exist yet ───────────────
+    has_section = any(
+        "".join(
+            pe.get("textRun", {}).get("content", "")
+            for pe in el.get("paragraph", {}).get("elements", [])
+        ).strip() == _REVIEW_HEADING
+        for el in content
+    )
+    if not has_section:
+        insert_at = content[-1]["endIndex"] - 1
+        heading_text = f"\n{_REVIEW_HEADING}\n"
+        subtitle_text = f"{datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
+        h_start = insert_at + 1  # skip leading \n
+        h_end = h_start + _utf16_len(_REVIEW_HEADING) + 1  # +1 for trailing \n
+        s_start = h_end
+        s_end = s_start + _utf16_len(subtitle_text)
+        service.documents().batchUpdate(
+            documentId=doc_id,
+            body={
+                "requests": [
+                    {
+                        "insertText": {
+                            "location": {"index": insert_at},
+                            "text": heading_text + subtitle_text,
+                        }
+                    },
+                    {
+                        "updateParagraphStyle": {
+                            "range": {"startIndex": h_start, "endIndex": h_end},
+                            "paragraphStyle": {"namedStyleType": "TITLE"},
+                            "fields": "namedStyleType",
+                        }
+                    },
+                    {
+                        "updateParagraphStyle": {
+                            "range": {"startIndex": s_start, "endIndex": s_end},
+                            "paragraphStyle": {"namedStyleType": "SUBTITLE"},
+                            "fields": "namedStyleType",
+                        }
+                    },
+                ]
+            },
+        ).execute()
+        # Re-fetch to get updated indices before inserting the note
+        doc = service.documents().get(documentId=doc_id).execute()
+        content = doc.get("body", {}).get("content", [])
 
     # ── Append the note at end of document ───────────────────────────────────
     insert_at = content[-1]["endIndex"] - 1
@@ -294,6 +308,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "doc", metavar="DOC_URL"
     )
 
+    sub.add_parser("clear", help="Delete the Ploma Vermella Review section.").add_argument(
+        "doc", metavar="DOC_URL"
+    )
+
     p_note = sub.add_parser(
         "note", help="Append a review note to the Ploma Vermella Review section."
     )
@@ -313,6 +331,8 @@ def main() -> None:
         result = list_folder(args.folder)
     elif args.command == "fetch":
         result = fetch_document(args.doc)
+    elif args.command == "clear":
+        result = clear_review_section(args.doc)
     else:
         result = append_review_note(args.doc, args.quoted_text, args.comment)
 
