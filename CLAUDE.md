@@ -7,8 +7,9 @@ CLI tool that reviews Google Doc book chapters and posts feedback as comments.
 - `pv.py` — Google Docs/Drive API logic and `pv` CLI entry point
 - `tests/test_pv.py` — unit tests (run with `pytest`, lint with `ruff`)
 - `install-hooks.sh` — installs pre-commit hook that runs tests before each commit
-- `context/style_guide.md` — prose rules (edit to update review criteria)
-- `context/outline.md` — chapter outline (edit to update structure expectations)
+- `context/style_guide.md` — working prose rules for the current review
+- `context/outline.md` — working chapter outline for the current review
+- `references/` — gitignored long-lived local reference material such as publisher style guides
 - `credentials/` — gitignored; contains OAuth credentials and token
 
 ## CLI (`pv`)
@@ -27,7 +28,7 @@ When asked to review a chapter:
 1. Read `context/folders.md` to find the Drive folder URL (gitignored, user-maintained)
 2. Run `pv list <folder-url>` to list available documents, or use a doc URL/ID directly if given
 3. Run `pv fetch <doc-url>` to get the chapter text and any existing comments
-4. Read all files in `context/` via the Read tool
+4. Read all files in `context/` and `references/` via the Read tool
 5. Run `pv clear <doc-url>` to remove any previous review section
 6. For each issue found, run `pv note <doc-url> <quoted-text> <comment>` — `quoted_text` must be an exact substring of the document text
 
@@ -35,6 +36,7 @@ When asked to review a chapter:
 
 Never commit:
 - Anything under `credentials/` (gitignored — OAuth secrets, tokens, URLs)
+- Anything under `references/` unless you are certain you have rights to redistribute it
 - Absolute paths specific to this machine (e.g. `/Users/yourname/...`)
 - Document IDs, folder IDs, or deployment URLs — these belong in `credentials/` or context files
 - API keys or client secrets of any kind

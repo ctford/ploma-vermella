@@ -36,7 +36,7 @@ Tell Claude Code in plain English:
 
 > "Review chapter 3 at `<doc-url>`."
 
-Claude will read all files in `context/`, fetch the document, and append a **🪶 Ploma Vermella Review** section at the end of the doc with dated, bulleted, located feedback.
+Claude will read all files in `context/` and `references/`, fetch the document, and append a **🪶 Ploma Vermella Review** section at the end of the doc with dated, bulleted, located feedback.
 
 The `pv` CLI is available for direct use (with the virtualenv active):
 
@@ -51,7 +51,7 @@ pv note <doc-url> <quoted-text> <comment>   # append a review note
 
 ## Context
 
-Drop any reference material into `context/` — style guide, chapter outline, author notes. Claude reads everything in the directory on each review. No code changes needed.
+Drop working review material into `context/` and longer-lived local reference material into `references/` — style guide, chapter outline, author notes. Claude reads both directories on each review. No code changes needed.
 
 ---
 

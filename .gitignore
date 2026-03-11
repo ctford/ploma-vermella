@@ -1,5 +1,6 @@
 credentials/
 context/
+references/
 __pycache__/
 *.py[cod]
 .venv/
