@@ -114,7 +114,12 @@ def _extract_text(doc: dict) -> str:
         for pe in paragraph.get("elements", []):
             text_run = pe.get("textRun")
             if text_run:
-                parts.append(text_run.get("content", ""))
+                content = text_run.get("content", "")
+                url = text_run.get("textStyle", {}).get("link", {}).get("url")
+                if url and content.strip():
+                    parts.append(f"[{content}]({url})")
+                else:
+                    parts.append(content)
     return "".join(parts)
 
 

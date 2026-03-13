@@ -14,13 +14,16 @@ CLI tool that reviews Google Doc book chapters and posts feedback as comments.
 
 ## CLI (`pv`)
 
+Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
+
 ```
-pv list <folder-url>                         # list docs in a Drive folder
-pv fetch <doc-url>                           # fetch title + text of a doc
-pv note <doc-url> <quoted-text> <comment>    # append to the review section
+.venv/bin/pv list <folder-url>                         # list docs in a Drive folder
+.venv/bin/pv fetch <doc-url>                           # fetch title + text of a doc
+.venv/bin/pv note <doc-url> <quoted-text> <comment>    # append to the review section
+.venv/bin/pv clear <doc-url>                           # remove the review section
 ```
 
-All commands output JSON. Use `pv -h` or `pv <command> -h` for help.
+All commands output JSON. Use `.venv/bin/pv -h` or `.venv/bin/pv <command> -h` for help.
 
 ## Review Workflow
 
@@ -30,7 +33,7 @@ When asked to review a chapter:
 3. Run `pv fetch <doc-url>` to get the chapter text and any existing comments
 4. Read all files in `context/` and `references/` via the Read tool
 5. Run `pv clear <doc-url>` to remove any previous review section
-6. For each issue found, run `pv note <doc-url> <quoted-text> <comment>` — `quoted_text` must be an exact substring of the document text
+6. For each issue found, run `pv note <doc-url> <quoted-text> <comment>` — `quoted_text` must be an exact substring of the document text. The `comment` should be self-contained: when the problem is a specific word or phrase, quote it inside the comment (e.g. `"Draft placeholder: \"Something something\" — expand or cut"`) so the reader knows exactly what to fix without needing to hunt for the highlighted text.
 
 ## What Not to Commit
 
