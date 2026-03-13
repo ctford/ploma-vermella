@@ -115,9 +115,13 @@ def _extract_text(doc: dict) -> str:
             text_run = pe.get("textRun")
             if text_run:
                 content = text_run.get("content", "")
-                url = text_run.get("textStyle", {}).get("link", {}).get("url")
+                style = text_run.get("textStyle", {})
+                url = style.get("link", {}).get("url")
+                strikethrough = style.get("strikethrough", False)
                 if url and content.strip():
                     parts.append(f"[{content}]({url})")
+                elif strikethrough and content.strip():
+                    parts.append(f"~~{content}~~")
                 else:
                     parts.append(content)
     return "".join(parts)
