@@ -189,6 +189,63 @@ def fetch_document(doc_id_or_url: str) -> dict:
     }
 
 
+def append_content(doc_id_or_url: str, heading: str, text: str) -> dict:
+    """
+    Append a headed section of plain content to the document body, before any
+    review section. Heading is inserted as HEADING_2. In the body text, lines
+    starting with '-' become bullets; blank lines are skipped; all others are
+    normal paragraphs.
+    """
+    doc_id = _extract_doc_id(doc_id_or_url)
+    service = _docs_service()
+    doc = service.documents().get(documentId=doc_id).execute()
+    content = doc.get("body", {}).get("content", [])
+
+    # Insert before the review section if it exists, otherwise at end
+    insert_at = content[-1]["endIndex"] - 1
+    for el in content:
+        para = el.get("paragraph", {})
+        text_val = "".join(
+            pe.get("textRun", {}).get("content", "")
+            for pe in para.get("elements", [])
+        ).strip()
+        if text_val == _REVIEW_HEADING:
+            insert_at = el["startIndex"] - 1
+            break
+
+    lines = [heading] + [line for line in text.splitlines() if line.strip()]
+    full_text = "\n".join(lines) + "\n"
+
+    requests = [{"insertText": {"location": {"index": insert_at}, "text": "\n" + full_text}}]
+
+    # Style each line
+    cursor = insert_at + 1  # skip the leading \n
+    for line in lines:
+        line_len = _utf16_len(line) + 1  # +1 for \n
+        line_end = cursor + line_len
+        if line == heading:
+            requests.append({
+                "updateParagraphStyle": {
+                    "range": {"startIndex": cursor, "endIndex": line_end},
+                    "paragraphStyle": {"namedStyleType": "HEADING_2"},
+                    "fields": "namedStyleType",
+                }
+            })
+        elif line.startswith("- "):
+            requests.append({
+                "createParagraphBullets": {
+                    "range": {"startIndex": cursor, "endIndex": line_end},
+                    "bulletPreset": "BULLET_DISC_CIRCLE_SQUARE",
+                }
+            })
+        cursor = line_end
+
+    service.documents().batchUpdate(
+        documentId=doc_id, body={"requests": requests}
+    ).execute()
+    return {"status": "appended", "heading": heading, "lines": len(lines)}
+
+
 def clear_review_section(doc_id_or_url: str) -> dict:
     """Delete the '🪶 Ploma Vermella Review' section if it exists."""
     doc_id = _extract_doc_id(doc_id_or_url)
@@ -329,6 +386,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "doc", metavar="DOC_URL"
     )
 
+    p_append = sub.add_parser(
+        "append", help="Append a headed content section to the document body."
+    )
+    p_append.add_argument("doc", metavar="DOC_URL")
+    p_append.add_argument("heading", metavar="HEADING",
+                          help="Section heading (rendered as Heading 2).")
+    p_append.add_argument("text", metavar="TEXT",
+                          help="Body text. Lines starting with '- ' become bullets.")
+
     p_note = sub.add_parser(
         "note", help="Append a review note to the Ploma Vermella Review section."
     )
@@ -350,6 +416,8 @@ def main() -> None:
         result = fetch_document(args.doc)
     elif args.command == "clear":
         result = clear_review_section(args.doc)
+    elif args.command == "append":
+        result = append_content(args.doc, args.heading, args.text)
     else:
         result = append_review_note(args.doc, args.quoted_text, args.comment)
 
