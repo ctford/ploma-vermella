@@ -191,28 +191,54 @@ def fetch_document(doc_id_or_url: str) -> dict:
 
 def append_content(doc_id_or_url: str, heading: str, text: str) -> dict:
     """
-    Append a headed section of plain content to the document body, before any
-    review section. Heading is inserted as HEADING_2. In the body text, lines
-    starting with '-' become bullets; blank lines are skipped; all others are
-    normal paragraphs.
+    Append a headed section into the Ploma Vermella Review section, creating
+    it if needed. Heading is inserted as HEADING_2. In the body text, lines
+    starting with '- ' become bullets; blank lines are skipped; all others
+    are normal paragraphs.
     """
     doc_id = _extract_doc_id(doc_id_or_url)
     service = _docs_service()
     doc = service.documents().get(documentId=doc_id).execute()
     content = doc.get("body", {}).get("content", [])
 
-    # Insert before the review section if it exists, otherwise at end
-    insert_at = content[-1]["endIndex"] - 1
-    for el in content:
-        para = el.get("paragraph", {})
-        text_val = "".join(
+    # Ensure the review section exists
+    has_section = any(
+        "".join(
             pe.get("textRun", {}).get("content", "")
-            for pe in para.get("elements", [])
-        ).strip()
-        if text_val == _REVIEW_HEADING:
-            insert_at = el["startIndex"] - 1
-            break
+            for pe in el.get("paragraph", {}).get("elements", [])
+        ).strip() == _REVIEW_HEADING
+        for el in content
+    )
+    if not has_section:
+        insert_at = content[-1]["endIndex"] - 1
+        heading_text = f"\n{_REVIEW_HEADING}\n"
+        subtitle_text = f"{datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
+        h_start = insert_at + 1
+        h_end = h_start + _utf16_len(_REVIEW_HEADING) + 1
+        s_start = h_end
+        s_end = s_start + _utf16_len(subtitle_text)
+        service.documents().batchUpdate(
+            documentId=doc_id,
+            body={"requests": [
+                {"insertText": {"location": {"index": insert_at},
+                                "text": heading_text + subtitle_text}},
+                {"updateParagraphStyle": {
+                    "range": {"startIndex": h_start, "endIndex": h_end},
+                    "paragraphStyle": {"namedStyleType": "TITLE"},
+                    "fields": "namedStyleType",
+                }},
+                {"updateParagraphStyle": {
+                    "range": {"startIndex": s_start, "endIndex": s_end},
+                    "paragraphStyle": {"namedStyleType": "SUBTITLE"},
+                    "fields": "namedStyleType",
+                }},
+            ]},
+        ).execute()
+        doc = service.documents().get(documentId=doc_id).execute()
+        content = doc.get("body", {}).get("content", [])
 
+    # Insert at end of document (inside the review section)
+    insert_at = content[-1]["endIndex"] - 1
     lines = [heading] + [line for line in text.splitlines() if line.strip()]
     full_text = "\n".join(lines) + "\n"
 
