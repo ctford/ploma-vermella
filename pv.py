@@ -239,14 +239,17 @@ def append_content(doc_id_or_url: str, heading: str, text: str) -> dict:
 
     # Insert at end of document (inside the review section)
     insert_at = content[-1]["endIndex"] - 1
-    lines = [heading] + [line for line in text.splitlines() if line.strip()]
+    raw_lines = [heading] + [line for line in text.splitlines() if line.strip()]
+    # Strip leading "- " from bullet lines before inserting — the bullet
+    # character is added by createParagraphBullets, not the text itself.
+    lines = [line[2:] if line.startswith("- ") else line for line in raw_lines]
     full_text = "\n".join(lines) + "\n"
 
     requests = [{"insertText": {"location": {"index": insert_at}, "text": "\n" + full_text}}]
 
-    # Style each line
+    # Style each line (use raw_lines to detect bullets before stripping)
     cursor = insert_at + 1  # skip the leading \n
-    for line in lines:
+    for line, raw in zip(lines, raw_lines):
         line_len = _utf16_len(line) + 1  # +1 for \n
         line_end = cursor + line_len
         if line == heading:
@@ -257,7 +260,7 @@ def append_content(doc_id_or_url: str, heading: str, text: str) -> dict:
                     "fields": "namedStyleType",
                 }
             })
-        elif line.startswith("- "):
+        elif raw.startswith("- "):
             requests.append({
                 "createParagraphBullets": {
                     "range": {"startIndex": cursor, "endIndex": line_end},
