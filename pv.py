@@ -239,7 +239,21 @@ def append_content(doc_id_or_url: str, heading: str, text: str) -> dict:
 
     # Insert at end of document (inside the review section)
     insert_at = content[-1]["endIndex"] - 1
-    raw_lines = [heading] + [line for line in text.splitlines() if line.strip()]
+
+    # Build line list, tracking which lines follow a blank line (paragraph break).
+    # Blank lines themselves are dropped — spacing is applied via paragraph style.
+    raw_lines = [heading]
+    after_blank = set()  # indices into raw_lines that follow a blank line
+    prev_blank = False
+    for line in text.splitlines():
+        if not line.strip():
+            prev_blank = True
+            continue
+        if prev_blank:
+            after_blank.add(len(raw_lines))
+            prev_blank = False
+        raw_lines.append(line)
+
     # Strip leading "- " from bullet lines before inserting — the bullet
     # character is added by createParagraphBullets, not the text itself.
     lines = [line[2:] if line.startswith("- ") else line for line in raw_lines]
@@ -249,7 +263,7 @@ def append_content(doc_id_or_url: str, heading: str, text: str) -> dict:
 
     # Style each line (use raw_lines to detect bullets before stripping)
     cursor = insert_at + 1  # skip the leading \n
-    for line, raw in zip(lines, raw_lines):
+    for i, (line, raw) in enumerate(zip(lines, raw_lines)):
         line_len = _utf16_len(line) + 1  # +1 for \n
         line_end = cursor + line_len
         if line == heading:
@@ -265,6 +279,14 @@ def append_content(doc_id_or_url: str, heading: str, text: str) -> dict:
                 "createParagraphBullets": {
                     "range": {"startIndex": cursor, "endIndex": line_end},
                     "bulletPreset": "BULLET_DISC_CIRCLE_SQUARE",
+                }
+            })
+        if i in after_blank:
+            requests.append({
+                "updateParagraphStyle": {
+                    "range": {"startIndex": cursor, "endIndex": line_end},
+                    "paragraphStyle": {"spaceAbove": {"magnitude": 10, "unit": "PT"}},
+                    "fields": "spaceAbove",
                 }
             })
         cursor = line_end
