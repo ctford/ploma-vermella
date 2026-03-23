@@ -274,13 +274,21 @@ def append_content(doc_id_or_url: str, heading: str, text: str) -> dict:
                     "fields": "namedStyleType",
                 }
             })
-        elif raw.startswith("- "):
+        else:
             requests.append({
-                "createParagraphBullets": {
+                "updateParagraphStyle": {
                     "range": {"startIndex": cursor, "endIndex": line_end},
-                    "bulletPreset": "BULLET_DISC_CIRCLE_SQUARE",
+                    "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                    "fields": "namedStyleType",
                 }
             })
+            if raw.startswith("- "):
+                requests.append({
+                    "createParagraphBullets": {
+                        "range": {"startIndex": cursor, "endIndex": line_end},
+                        "bulletPreset": "BULLET_DISC_CIRCLE_SQUARE",
+                    }
+                })
         if i in after_blank:
             requests.append({
                 "updateParagraphStyle": {
