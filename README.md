@@ -45,6 +45,7 @@ source .venv/bin/activate
 pv list <folder-url>                        # list docs in a Drive folder
 pv fetch <doc-url>                          # fetch title + text of a doc
 pv note <doc-url> <quoted-text> <comment>   # append a review note
+pv build-epub <doc-url> <doc-url> ...       # build an EPUB from multiple docs into dist/ with a date suffix
 ```
 
 ---
