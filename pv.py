@@ -1,8 +1,11 @@
 """Google Docs API logic — fetch document content and write review notes."""
 
 import argparse
+import html
 import json
 import re
+import uuid
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
@@ -55,11 +58,93 @@ def _drive_service():
 
 _HEADING_STYLES = {"HEADING_1", "HEADING_2", "HEADING_3", "HEADING_4", "TITLE"}
 _REVIEW_HEADING = "🪶 Ploma Vermella Review"
+_EPUB_NS = "http://www.idpf.org/2007/ops"
 
 
 def _utf16_len(s: str) -> int:
     """Length of s in UTF-16 code units (the unit the Docs API uses for indices)."""
     return sum(2 if ord(c) > 0xFFFF else 1 for c in s)
+
+
+def _parse_table_row(line: str) -> list[str]:
+    """Parse a markdown-style pipe table row into stripped cell values."""
+    text = line.strip()
+    if not (text.startswith("|") and text.endswith("|")):
+        raise ValueError(f"not a pipe table row: {line!r}")
+    return [cell.strip() for cell in text[1:-1].split("|")]
+
+
+def _is_table_separator(line: str, columns: int) -> bool:
+    """Return True if line looks like a markdown table separator row."""
+    try:
+        cells = _parse_table_row(line)
+    except ValueError:
+        return False
+    if len(cells) != columns:
+        return False
+    for cell in cells:
+        if not cell:
+            return False
+        if any(ch not in "-: " for ch in cell):
+            return False
+        if "-" not in cell:
+            return False
+    return True
+
+
+def _parse_append_blocks(text: str) -> list[dict]:
+    """Parse append text into paragraph, bullet, and table blocks."""
+    lines = text.splitlines()
+    blocks = []
+    i = 0
+    need_space_above = False
+
+    while i < len(lines):
+        line = lines[i]
+        if not line.strip():
+            need_space_above = True
+            i += 1
+            continue
+
+        # Parse markdown-style pipe tables.
+        if line.strip().startswith("|") and i + 1 < len(lines):
+            try:
+                header = _parse_table_row(line)
+            except ValueError:
+                header = None
+            if header and _is_table_separator(lines[i + 1], len(header)):
+                rows = [header]
+                i += 2
+                while i < len(lines):
+                    next_line = lines[i]
+                    if not next_line.strip():
+                        break
+                    if not next_line.strip().startswith("|"):
+                        break
+                    cells = _parse_table_row(next_line)
+                    if len(cells) != len(header):
+                        break
+                    rows.append(cells)
+                    i += 1
+                blocks.append({
+                    "type": "table",
+                    "rows": rows,
+                    "space_above": need_space_above,
+                })
+                need_space_above = False
+                continue
+
+        block_type = "bullet" if line.startswith("- ") else "paragraph"
+        text_value = line[2:] if block_type == "bullet" else line
+        blocks.append({
+            "type": block_type,
+            "text": text_value,
+            "space_above": need_space_above,
+        })
+        need_space_above = False
+        i += 1
+
+    return blocks
 
 
 def _paragraph_location(doc: dict, quoted_text: str) -> str:
@@ -127,6 +212,185 @@ def _extract_text(doc: dict) -> str:
     return "".join(parts)
 
 
+def _text_from_elements(elements: list[dict]) -> str:
+    """Extract plain paragraph text from Docs API paragraph elements."""
+    return "".join(
+        pe.get("textRun", {}).get("content", "")
+        for pe in elements
+    ).rstrip("\n")
+
+
+def _extract_blocks(doc: dict) -> list[dict]:
+    """
+    Extract document blocks suitable for EPUB rendering.
+
+    Returns a list of dictionaries with type keys:
+    - {"type": "heading", "level": 1..4, "text": "..."}
+    - {"type": "paragraph", "text": "..."}
+    - {"type": "list_item", "text": "..."}
+    """
+    blocks = []
+    for element in doc.get("body", {}).get("content", []):
+        paragraph = element.get("paragraph")
+        if not paragraph:
+            continue
+
+        text = _text_from_elements(paragraph.get("elements", []))
+        if not text:
+            continue
+        if text == _REVIEW_HEADING:
+            break
+
+        style = paragraph.get("paragraphStyle", {}).get("namedStyleType", "")
+        if "bullet" in paragraph:
+            blocks.append({"type": "list_item", "text": text})
+            continue
+
+        if style == "TITLE":
+            blocks.append({"type": "heading", "level": 1, "text": text})
+        elif style == "HEADING_1":
+            blocks.append({"type": "heading", "level": 2, "text": text})
+        elif style == "HEADING_2":
+            blocks.append({"type": "heading", "level": 3, "text": text})
+        elif style in {"HEADING_3", "HEADING_4"}:
+            blocks.append({"type": "heading", "level": 4, "text": text})
+        else:
+            blocks.append({"type": "paragraph", "text": text})
+
+    return blocks
+
+
+def _slugify(value: str) -> str:
+    """Return a filesystem-friendly ASCII-ish slug."""
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug or "book"
+
+
+def _chapter_filename(index: int) -> str:
+    """Return a stable EPUB filename for a chapter."""
+    return f"chapter-{index:02d}.xhtml"
+
+
+def _blocks_to_xhtml(title: str, blocks: list[dict]) -> str:
+    """Render extracted blocks as a simple XHTML chapter."""
+    parts = []
+    in_list = False
+    for block in blocks:
+        block_type = block["type"]
+        text = html.escape(block["text"])
+        if block_type == "list_item":
+            if not in_list:
+                parts.append("<ul>")
+                in_list = True
+            parts.append(f"<li>{text}</li>")
+            continue
+
+        if in_list:
+            parts.append("</ul>")
+            in_list = False
+
+        if block_type == "heading":
+            level = max(1, min(6, int(block["level"])))
+            parts.append(f"<h{level}>{text}</h{level}>")
+        else:
+            parts.append(f"<p>{text}</p>")
+
+    if in_list:
+        parts.append("</ul>")
+
+    body = "\n    ".join(parts)
+    doc_title = html.escape(title)
+    return (
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+        "<html xmlns=\"http://www.w3.org/1999/xhtml\" "
+        f"xmlns:epub=\"{_EPUB_NS}\">\n"
+        "<head>\n"
+        f"  <title>{doc_title}</title>\n"
+        "  <link rel=\"stylesheet\" type=\"text/css\" href=\"styles.css\"/>\n"
+        "</head>\n"
+        "<body>\n"
+        f"  <section epub:type=\"chapter\">\n    {body}\n  </section>\n"
+        "</body>\n"
+        "</html>\n"
+    )
+
+
+def _epub_nav(book_title: str, chapters: list[dict]) -> str:
+    """Return the EPUB navigation document."""
+    items = "\n      ".join(
+        f"<li><a href=\"{html.escape(ch['filename'])}\">{html.escape(ch['title'])}</a></li>"
+        for ch in chapters
+    )
+    safe_title = html.escape(book_title)
+    return (
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+        "<html xmlns=\"http://www.w3.org/1999/xhtml\" "
+        f"xmlns:epub=\"{_EPUB_NS}\">\n"
+        "<head>\n"
+        f"  <title>{safe_title}</title>\n"
+        "</head>\n"
+        "<body>\n"
+        "  <nav epub:type=\"toc\" id=\"toc\">\n"
+        f"    <h1>{safe_title}</h1>\n"
+        "    <ol>\n"
+        f"      {items}\n"
+        "    </ol>\n"
+        "  </nav>\n"
+        "</body>\n"
+        "</html>\n"
+    )
+
+
+def _epub_package(book_title: str, book_id: str, chapters: list[dict]) -> str:
+    """Return the OPF package document."""
+    manifest_items = [
+        '<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>',
+        '<item id="css" href="styles.css" media-type="text/css"/>',
+    ]
+    spine_items = []
+    for i, chapter in enumerate(chapters, start=1):
+        manifest_items.append(
+            f'<item id="chap{i}" href="{chapter["filename"]}" media-type="application/xhtml+xml"/>'
+        )
+        spine_items.append(f'<itemref idref="chap{i}"/>')
+
+    manifest = "\n    ".join(manifest_items)
+    spine = "\n    ".join(spine_items)
+    modified = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    safe_title = html.escape(book_title)
+    return (
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+        "<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" "
+        f'unique-identifier="bookid" xml:lang="en">\n'
+        "  <metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n"
+        f"    <dc:identifier id=\"bookid\">urn:uuid:{book_id}</dc:identifier>\n"
+        f"    <dc:title>{safe_title}</dc:title>\n"
+        "    <dc:language>en</dc:language>\n"
+        f"    <meta property=\"dcterms:modified\">{modified}</meta>\n"
+        "  </metadata>\n"
+        "  <manifest>\n"
+        f"    {manifest}\n"
+        "  </manifest>\n"
+        "  <spine>\n"
+        f"    {spine}\n"
+        "  </spine>\n"
+        "</package>\n"
+    )
+
+
+def _default_epub_title(chapter_titles: list[str]) -> str:
+    """Return a default book title for a collection of chapters."""
+    if len(chapter_titles) == 1:
+        return chapter_titles[0]
+    return "Ploma Vermella Export"
+
+
+def _default_epub_output_path(book_title: str, stamp: datetime | None = None) -> Path:
+    """Return the default gitignored EPUB output path."""
+    stamp = stamp or datetime.now()
+    return Path("dist") / f"{_slugify(book_title)}-{stamp.strftime('%Y%m%d')}.epub"
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -189,6 +453,68 @@ def fetch_document(doc_id_or_url: str) -> dict:
     }
 
 
+def build_epub(
+    doc_ids_or_urls: list[str],
+    output: str | None = None,
+    title: str | None = None,
+) -> dict:
+    """Build an EPUB from multiple Google Docs, excluding PV review sections."""
+    docs_service = _docs_service()
+    chapters = []
+    for index, doc_ref in enumerate(doc_ids_or_urls, start=1):
+        doc_id = _extract_doc_id(doc_ref)
+        doc = docs_service.documents().get(documentId=doc_id).execute()
+        chapter_title = doc.get("title", f"Chapter {index}")
+        chapters.append({
+            "title": chapter_title,
+            "filename": _chapter_filename(index),
+            "xhtml": _blocks_to_xhtml(chapter_title, _extract_blocks(doc)),
+        })
+
+    book_title = title or _default_epub_title([chapter["title"] for chapter in chapters])
+    output_path = Path(output) if output else _default_epub_output_path(book_title)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    book_id = str(uuid.uuid4())
+    nav = _epub_nav(book_title, chapters)
+    package = _epub_package(book_title, book_id, chapters)
+    stylesheet = (
+        "body { font-family: serif; line-height: 1.4; }\n"
+        "h1, h2, h3, h4 { font-family: sans-serif; }\n"
+        "section { max-width: 42em; margin: 0 auto; }\n"
+        "p, li { margin: 0.6em 0; }\n"
+    )
+
+    with zipfile.ZipFile(output_path, "w") as epub:
+        epub.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        epub.writestr(
+            "META-INF/container.xml",
+            "<?xml version=\"1.0\"?>\n"
+            "<container version=\"1.0\" "
+            "xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\">\n"
+            "  <rootfiles>\n"
+            "    <rootfile full-path=\"OEBPS/content.opf\" "
+            "media-type=\"application/oebps-package+xml\"/>\n"
+            "  </rootfiles>\n"
+            "</container>\n",
+        )
+        epub.writestr("OEBPS/content.opf", package)
+        epub.writestr("OEBPS/nav.xhtml", nav)
+        epub.writestr("OEBPS/styles.css", stylesheet)
+        for chapter in chapters:
+            epub.writestr(f"OEBPS/{chapter['filename']}", chapter["xhtml"])
+
+    return {
+        "status": "built",
+        "title": book_title,
+        "output": str(output_path),
+        "chapters": [
+            {"title": chapter["title"], "filename": chapter["filename"]}
+            for chapter in chapters
+        ],
+    }
+
+
 def append_content(doc_id_or_url: str, heading: str, text: str) -> dict:
     """
     Append a headed section into the Ploma Vermella Review section, creating
@@ -237,72 +563,117 @@ def append_content(doc_id_or_url: str, heading: str, text: str) -> dict:
         doc = service.documents().get(documentId=doc_id).execute()
         content = doc.get("body", {}).get("content", [])
 
-    # Insert at end of document (inside the review section)
-    insert_at = content[-1]["endIndex"] - 1
+    def refresh():
+        current = service.documents().get(documentId=doc_id).execute()
+        return current, current.get("body", {}).get("content", [])
 
-    # Build line list, tracking which lines follow a blank line (paragraph break).
-    # Blank lines themselves are dropped — spacing is applied via paragraph style.
-    raw_lines = [heading]
-    after_blank = set()  # indices into raw_lines that follow a blank line
-    prev_blank = False
-    for line in text.splitlines():
-        if not line.strip():
-            prev_blank = True
-            continue
-        if prev_blank:
-            after_blank.add(len(raw_lines))
-            prev_blank = False
-        raw_lines.append(line)
-
-    # Strip leading "- " from bullet lines before inserting — the bullet
-    # character is added by createParagraphBullets, not the text itself.
-    lines = [line[2:] if line.startswith("- ") else line for line in raw_lines]
-    full_text = "\n".join(lines) + "\n"
-
-    requests = [{"insertText": {"location": {"index": insert_at}, "text": "\n" + full_text}}]
-
-    # Style each line (use raw_lines to detect bullets before stripping)
-    cursor = insert_at + 1  # skip the leading \n
-    for i, (line, raw) in enumerate(zip(lines, raw_lines)):
-        line_len = _utf16_len(line) + 1  # +1 for \n
-        line_end = cursor + line_len
-        if line == heading:
+    def append_paragraph(text_value: str, *, style: str, bullet: bool = False,
+                         space_above: bool = False) -> None:
+        _, current_content = refresh()
+        insert_at = current_content[-1]["endIndex"] - 1
+        inserted = "\n" + text_value + "\n"
+        start = insert_at + 1
+        end = start + _utf16_len(text_value) + 1
+        requests = [{
+            "insertText": {"location": {"index": insert_at}, "text": inserted}
+        }, {
+            "updateParagraphStyle": {
+                "range": {"startIndex": start, "endIndex": end},
+                "paragraphStyle": {"namedStyleType": style},
+                "fields": "namedStyleType",
+            }
+        }]
+        if bullet:
             requests.append({
-                "updateParagraphStyle": {
-                    "range": {"startIndex": cursor, "endIndex": line_end},
-                    "paragraphStyle": {"namedStyleType": "HEADING_2"},
-                    "fields": "namedStyleType",
+                "createParagraphBullets": {
+                    "range": {"startIndex": start, "endIndex": end},
+                    "bulletPreset": "BULLET_DISC_CIRCLE_SQUARE",
                 }
             })
-        else:
+        if space_above:
             requests.append({
                 "updateParagraphStyle": {
-                    "range": {"startIndex": cursor, "endIndex": line_end},
-                    "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
-                    "fields": "namedStyleType",
-                }
-            })
-            if raw.startswith("- "):
-                requests.append({
-                    "createParagraphBullets": {
-                        "range": {"startIndex": cursor, "endIndex": line_end},
-                        "bulletPreset": "BULLET_DISC_CIRCLE_SQUARE",
-                    }
-                })
-        if i in after_blank:
-            requests.append({
-                "updateParagraphStyle": {
-                    "range": {"startIndex": cursor, "endIndex": line_end},
+                    "range": {"startIndex": start, "endIndex": end},
                     "paragraphStyle": {"spaceAbove": {"magnitude": 10, "unit": "PT"}},
                     "fields": "spaceAbove",
                 }
             })
-        cursor = line_end
+        service.documents().batchUpdate(
+            documentId=doc_id, body={"requests": requests}
+        ).execute()
 
-    service.documents().batchUpdate(
-        documentId=doc_id, body={"requests": requests}
-    ).execute()
-    return {"status": "appended", "heading": heading, "lines": len(lines)}
+    def append_table(rows: list[list[str]], *, space_above: bool = False) -> None:
+        current_doc, current_content = refresh()
+        insert_at = current_content[-1]["endIndex"] - 1
+        if space_above:
+            service.documents().batchUpdate(
+                documentId=doc_id,
+                body={"requests": [{
+                    "insertText": {"location": {"index": insert_at}, "text": "\n"}
+                }]},
+            ).execute()
+            _, current_content = refresh()
+            insert_at = current_content[-1]["endIndex"] - 1
+
+        service.documents().batchUpdate(
+            documentId=doc_id,
+            body={"requests": [{
+                "insertTable": {
+                    "rows": len(rows),
+                    "columns": len(rows[0]),
+                    "location": {"index": insert_at},
+                }
+            }]},
+        ).execute()
+
+        _, current_content = refresh()
+        table = next(el["table"] for el in reversed(current_content) if "table" in el)
+        requests = []
+        for row_index, row in enumerate(rows):
+            for col_index, cell_text in enumerate(row):
+                cell = table["tableRows"][row_index]["tableCells"][col_index]
+                if not cell_text:
+                    continue
+                cell_insert_at = cell["content"][0]["endIndex"] - 1
+                requests.append({
+                    "insertText": {
+                        "location": {"index": cell_insert_at},
+                        "text": cell_text,
+                    }
+                })
+                if row_index == 0:
+                    requests.append({
+                        "updateTextStyle": {
+                            "range": {
+                                "startIndex": cell_insert_at,
+                                "endIndex": cell_insert_at + _utf16_len(cell_text),
+                            },
+                            "textStyle": {"bold": True},
+                            "fields": "bold",
+                        }
+                    })
+        current_end = current_content[-1]["endIndex"] - 1
+        requests.append({
+            "insertText": {"location": {"index": current_end}, "text": "\n"}
+        })
+        service.documents().batchUpdate(
+            documentId=doc_id, body={"requests": requests}
+        ).execute()
+
+    append_paragraph(heading, style="HEADING_2")
+    blocks = _parse_append_blocks(text)
+    for block in blocks:
+        if block["type"] == "table":
+            append_table(block["rows"], space_above=block["space_above"])
+        else:
+            append_paragraph(
+                block["text"],
+                style="NORMAL_TEXT",
+                bullet=block["type"] == "bullet",
+                space_above=block["space_above"],
+            )
+
+    return {"status": "appended", "heading": heading, "lines": 1 + len(blocks)}
 
 
 def clear_review_section(doc_id_or_url: str) -> dict:
@@ -462,6 +833,25 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Exact substring used to determine the note's location.")
     p_note.add_argument("comment", metavar="COMMENT", help="Note text to append.")
 
+    p_epub = sub.add_parser(
+        "build-epub",
+        help="Build an EPUB from one or more Google Docs.",
+    )
+    p_epub.add_argument(
+        "docs",
+        metavar="DOC_URL",
+        nargs="+",
+        help="One or more Google Doc URLs/IDs to include as chapters.",
+    )
+    p_epub.add_argument(
+        "-o", "--output",
+        help="Output EPUB path. Defaults to dist/<slugified-title>-YYYYMMDD.epub.",
+    )
+    p_epub.add_argument(
+        "--title",
+        help="Book title for the EPUB metadata and default filename.",
+    )
+
     return parser
 
 
@@ -477,6 +867,8 @@ def main() -> None:
         result = clear_review_section(args.doc)
     elif args.command == "append":
         result = append_content(args.doc, args.heading, args.text)
+    elif args.command == "build-epub":
+        result = build_epub(args.docs, output=args.output, title=args.title)
     else:
         result = append_review_note(args.doc, args.quoted_text, args.comment)
 

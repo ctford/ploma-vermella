@@ -1,10 +1,17 @@
 """Tests for pv.py — pure functions."""
 
+from datetime import datetime
+
 from pv import (
+    _blocks_to_xhtml,
+    _default_epub_output_path,
+    _extract_blocks,
     _extract_doc_id,
     _extract_folder_id,
     _extract_text,
     _paragraph_location,
+    _parse_append_blocks,
+    _slugify,
 )
 
 # ---------------------------------------------------------------------------
@@ -78,6 +85,134 @@ def test_extract_text_stops_at_review_heading():
         {"paragraph": {"elements": [{"textRun": {"content": "Review note.\n"}}]}},
     ]}}
     assert _extract_text(doc) == "Chapter text.\n"
+
+
+# ---------------------------------------------------------------------------
+# _parse_append_blocks
+# ---------------------------------------------------------------------------
+
+def test_parse_append_blocks_keeps_paragraphs_and_bullets():
+    blocks = _parse_append_blocks("Intro line\n- Bullet one\n\nNext para")
+    assert blocks == [
+        {"type": "paragraph", "text": "Intro line", "space_above": False},
+        {"type": "bullet", "text": "Bullet one", "space_above": False},
+        {"type": "paragraph", "text": "Next para", "space_above": True},
+    ]
+
+
+def test_parse_append_blocks_parses_markdown_tables():
+    blocks = _parse_append_blocks(
+        "| A | B |\n"
+        "| --- | --- |\n"
+        "| 1 | 2 |\n"
+        "| 3 | 4 |\n"
+    )
+    assert blocks == [{
+        "type": "table",
+        "rows": [["A", "B"], ["1", "2"], ["3", "4"]],
+        "space_above": False,
+    }]
+
+
+def test_parse_append_blocks_applies_spacing_before_table():
+    blocks = _parse_append_blocks(
+        "Para\n\n"
+        "| A | B |\n"
+        "| --- | --- |\n"
+        "| 1 | 2 |\n"
+    )
+    assert blocks[-1] == {
+        "type": "table",
+        "rows": [["A", "B"], ["1", "2"]],
+        "space_above": True,
+    }
+
+
+# ---------------------------------------------------------------------------
+# _extract_blocks / EPUB helpers
+# ---------------------------------------------------------------------------
+
+BLOCK_DOC = {
+    "body": {
+        "content": [
+            {
+                "paragraph": {
+                    "paragraphStyle": {"namedStyleType": "TITLE"},
+                    "elements": [{"textRun": {"content": "Chapter Title\n"}}],
+                }
+            },
+            {
+                "paragraph": {
+                    "paragraphStyle": {"namedStyleType": "HEADING_1"},
+                    "elements": [{"textRun": {"content": "Section\n"}}],
+                }
+            },
+            {
+                "paragraph": {
+                    "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                    "elements": [{"textRun": {"content": "Body paragraph.\n"}}],
+                }
+            },
+            {
+                "paragraph": {
+                    "bullet": {},
+                    "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                    "elements": [{"textRun": {"content": "Bullet item\n"}}],
+                }
+            },
+            {
+                "paragraph": {
+                    "paragraphStyle": {"namedStyleType": "TITLE"},
+                    "elements": [{"textRun": {"content": "🪶 Ploma Vermella Review\n"}}],
+                }
+            },
+            {
+                "paragraph": {
+                    "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                    "elements": [{"textRun": {"content": "Should not appear\n"}}],
+                }
+            },
+        ]
+    }
+}
+
+
+def test_extract_blocks_preserves_structure_and_stops_at_review():
+    assert _extract_blocks(BLOCK_DOC) == [
+        {"type": "heading", "level": 1, "text": "Chapter Title"},
+        {"type": "heading", "level": 2, "text": "Section"},
+        {"type": "paragraph", "text": "Body paragraph."},
+        {"type": "list_item", "text": "Bullet item"},
+    ]
+
+
+def test_slugify_builds_safe_filename():
+    assert _slugify("Chapter 07: Example Chapter") == "chapter-07-example-chapter"
+
+
+def test_default_epub_output_path_includes_date_suffix():
+    path = _default_epub_output_path(
+        "Example Book",
+        stamp=datetime(2026, 3, 24, 10, 30),
+    )
+    assert str(path) == "dist/example-book-20260324.epub"
+
+
+def test_blocks_to_xhtml_renders_list_and_headings():
+    xhtml = _blocks_to_xhtml(
+        "Example",
+        [
+            {"type": "heading", "level": 2, "text": "Section"},
+            {"type": "paragraph", "text": "Body & more"},
+            {"type": "list_item", "text": "One"},
+            {"type": "list_item", "text": "Two"},
+        ],
+    )
+    assert "<h2>Section</h2>" in xhtml
+    assert "<p>Body &amp; more</p>" in xhtml
+    assert "<ul>" in xhtml
+    assert "<li>One</li>" in xhtml
+    assert "<li>Two</li>" in xhtml
 
 
 # ---------------------------------------------------------------------------
