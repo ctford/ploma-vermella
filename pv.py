@@ -694,30 +694,36 @@ def append_content(doc_id_or_url: str, heading: str, text: str) -> dict:
 
         _, current_content = refresh()
         table = next(el["table"] for el in reversed(current_content) if "table" in el)
-        requests = []
+        cell_writes = []
         for row_index, row in enumerate(rows):
             for col_index, cell_text in enumerate(row):
                 cell = table["tableRows"][row_index]["tableCells"][col_index]
                 if not cell_text:
                     continue
                 cell_insert_at = cell["content"][0]["endIndex"] - 1
+                cell_writes.append((cell_insert_at, cell_text, row_index == 0))
+
+        requests = []
+        for cell_insert_at, cell_text, is_header in sorted(
+            cell_writes, key=lambda item: item[0], reverse=True
+        ):
+            requests.append({
+                "insertText": {
+                    "location": {"index": cell_insert_at},
+                    "text": cell_text,
+                }
+            })
+            if is_header:
                 requests.append({
-                    "insertText": {
-                        "location": {"index": cell_insert_at},
-                        "text": cell_text,
+                    "updateTextStyle": {
+                        "range": {
+                            "startIndex": cell_insert_at,
+                            "endIndex": cell_insert_at + _utf16_len(cell_text),
+                        },
+                        "textStyle": {"bold": True},
+                        "fields": "bold",
                     }
                 })
-                if row_index == 0:
-                    requests.append({
-                        "updateTextStyle": {
-                            "range": {
-                                "startIndex": cell_insert_at,
-                                "endIndex": cell_insert_at + _utf16_len(cell_text),
-                            },
-                            "textStyle": {"bold": True},
-                            "fields": "bold",
-                        }
-                    })
         current_end = current_content[-1]["endIndex"] - 1
         requests.append({
             "insertText": {"location": {"index": current_end}, "text": "\n"}
