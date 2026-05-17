@@ -416,6 +416,8 @@ def list_folder(folder_id_or_url: str) -> list[dict]:
             ),
             fields="files(id, name)",
             orderBy="name",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
         )
         .execute()
     )
@@ -427,6 +429,70 @@ def list_folder(folder_id_or_url: str) -> list[dict]:
         }
         for f in result.get("files", [])
     ]
+
+
+def move_document(doc_id_or_url: str, folder_id_or_url: str) -> dict:
+    """Move a Drive file into a folder. Removes all existing parents."""
+    doc_id = _extract_doc_id(doc_id_or_url)
+    folder_id = _extract_folder_id(folder_id_or_url)
+    service = _drive_service()
+    current = (
+        service.files()
+        .get(fileId=doc_id, fields="id,name,parents", supportsAllDrives=True)
+        .execute()
+    )
+    prev_parents = ",".join(current.get("parents", []))
+    updated = (
+        service.files()
+        .update(
+            fileId=doc_id,
+            addParents=folder_id,
+            removeParents=prev_parents,
+            fields="id,name,parents,webViewLink",
+            supportsAllDrives=True,
+        )
+        .execute()
+    )
+    return {
+        "status": "moved",
+        "id": updated["id"],
+        "name": updated["name"],
+        "from": current.get("parents", []),
+        "to": updated.get("parents", []),
+        "url": updated.get("webViewLink", f"https://docs.google.com/document/d/{updated['id']}"),
+    }
+
+
+def copy_document(
+    doc_id_or_url: str,
+    folder_id_or_url: str,
+    name: str | None = None,
+) -> dict:
+    """Copy a Drive file into a folder, optionally renaming it."""
+    doc_id = _extract_doc_id(doc_id_or_url)
+    folder_id = _extract_folder_id(folder_id_or_url)
+    service = _drive_service()
+    body: dict = {"parents": [folder_id]}
+    if name is not None:
+        body["name"] = name
+    copied = (
+        service.files()
+        .copy(
+            fileId=doc_id,
+            body=body,
+            fields="id,name,parents,webViewLink",
+            supportsAllDrives=True,
+        )
+        .execute()
+    )
+    return {
+        "status": "copied",
+        "source_id": doc_id,
+        "id": copied["id"],
+        "name": copied["name"],
+        "parents": copied.get("parents", []),
+        "url": copied.get("webViewLink", f"https://docs.google.com/document/d/{copied['id']}"),
+    }
 
 
 def fetch_document(doc_id_or_url: str) -> dict:
@@ -852,6 +918,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Book title for the EPUB metadata and default filename.",
     )
 
+    p_mv = sub.add_parser("mv", help="Move a Google Doc into a Drive folder.")
+    p_mv.add_argument("doc", metavar="DOC_URL")
+    p_mv.add_argument("folder", metavar="FOLDER_URL")
+
+    p_cp = sub.add_parser("cp", help="Copy a Google Doc into a Drive folder.")
+    p_cp.add_argument("doc", metavar="DOC_URL")
+    p_cp.add_argument("folder", metavar="FOLDER_URL")
+    p_cp.add_argument(
+        "--name",
+        help="Name for the copy. Defaults to the source document's name.",
+    )
+
     return parser
 
 
@@ -869,6 +947,10 @@ def main() -> None:
         result = append_content(args.doc, args.heading, args.text)
     elif args.command == "build-epub":
         result = build_epub(args.docs, output=args.output, title=args.title)
+    elif args.command == "mv":
+        result = move_document(args.doc, args.folder)
+    elif args.command == "cp":
+        result = copy_document(args.doc, args.folder, name=args.name)
     else:
         result = append_review_note(args.doc, args.quoted_text, args.comment)
 
