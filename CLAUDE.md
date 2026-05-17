@@ -7,8 +7,10 @@ CLI tool that reviews Google Doc book chapters and posts feedback as comments.
 - `pv.py` — Google Docs/Drive API logic and `pv` CLI entry point
 - `tests/test_pv.py` — unit tests (run with `.venv/bin/pytest`, lint with `.venv/bin/ruff`)
 - `install-hooks.sh` — installs pre-commit hook that runs tests before each commit
-- `context/style_guide.md` — working prose rules for the current review
-- `context/outline.md` — working chapter outline for the current review
+- `context/` — gitignored; one subdir per book under review, plus shared rules
+  - `context/style_guide.md` — shared prose rules (applies to every book)
+  - `context/<book-slug>/` — per-book context: `outline.md`, `documents.md`, `keystone-chapters.md`, `folders.md`, `notes.md`, `talking-chapters/`, etc.
+  - A book's `notes.md` records where its conventions diverge from the shared style guide (e.g. a multi-author book that uses "we" intentionally)
 - `references/` — gitignored long-lived local reference material such as publisher style guides
 - `credentials/` — gitignored; contains OAuth credentials and token
 
@@ -31,10 +33,10 @@ All commands output JSON. Use `.venv/bin/pv -h` or `.venv/bin/pv <command> -h` f
 ## Review Workflow
 
 When asked to review a chapter:
-1. Read `context/folders.md` to find the Drive folder URL (gitignored, user-maintained)
+1. Identify which book the chapter belongs to (one subdir under `context/`). Read `context/<book-slug>/folders.md` for the Drive folder URL if present.
 2. Run `pv list <folder-url>` to list available documents, or use a doc URL/ID directly if given
 3. Run `pv fetch <doc-url>` to get the chapter text and any existing comments
-4. Read all files in `context/` and `references/` via the Read tool
+4. Read `context/style_guide.md` (shared rules) plus everything under `context/<book-slug>/` and any relevant files in `references/` via the Read tool. The book's `notes.md` will flag any divergence from the shared style guide.
 5. Run `pv clear <doc-url>` to remove any previous review section
 6. For each issue found, run `pv note <doc-url> <quoted-text> <comment>` — `quoted_text` must be an exact substring of the document text. The `comment` should be self-contained: when the problem is a specific word or phrase, quote it inside the comment (e.g. `"Draft placeholder: \"Something something\" — expand or cut"`) so the reader knows exactly what to fix without needing to hunt for the highlighted text.
 
