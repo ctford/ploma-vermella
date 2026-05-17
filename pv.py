@@ -33,6 +33,17 @@ def _extract_doc_id(doc_id_or_url: str) -> str:
     return m.group(1) if m else doc_id_or_url.strip()
 
 
+def _review_copy_title(
+    title: str,
+    stamp: datetime | None = None,
+    suffix_template: str | None = None,
+) -> str:
+    """Return a dated review-copy title."""
+    stamp = stamp or datetime.now()
+    suffix_template = suffix_template or " - DRAFT {date}"
+    return f"{title}{suffix_template.format(date=stamp.strftime('%Y-%m-%d'))}"
+
+
 def _get_credentials() -> Credentials:
     creds = None
     if TOKEN_FILE.exists():
@@ -772,6 +783,53 @@ def clear_review_section(doc_id_or_url: str) -> dict:
     return {"status": "nothing_to_clear"}
 
 
+def make_review_copy(
+    doc_id_or_url: str,
+    folder_id_or_url: str,
+    suffix_template: str | None = None,
+    clear_pv_review_section: bool = True,
+) -> dict:
+    """
+    Copy a Google Doc into a folder, suffix the title with a dated template
+    (default ' - DRAFT {date}'), and optionally clear the PV review section.
+
+    suffix_template supports '{date}' for today's ISO date.
+    """
+    doc_id = _extract_doc_id(doc_id_or_url)
+    folder_id = _extract_folder_id(folder_id_or_url)
+
+    docs_service = _docs_service()
+    drive_service = _drive_service()
+
+    source_doc = docs_service.documents().get(documentId=doc_id).execute()
+    source_title = source_doc.get("title", "Untitled")
+    copy_title = _review_copy_title(source_title, suffix_template=suffix_template)
+
+    copied = (
+        drive_service.files()
+        .copy(
+            fileId=doc_id,
+            body={"name": copy_title, "parents": [folder_id]},
+            fields="id,name,parents,webViewLink",
+            supportsAllDrives=True,
+        )
+        .execute()
+    )
+
+    if clear_pv_review_section:
+        clear_review_section(copied["id"])
+
+    return {
+        "status": "created",
+        "source_id": doc_id,
+        "source_title": source_title,
+        "copy_id": copied["id"],
+        "copy_title": copied["name"],
+        "copy_url": copied.get("webViewLink", f"https://docs.google.com/document/d/{copied['id']}"),
+        "folder_id": folder_id,
+    }
+
+
 def append_review_note(doc_id_or_url: str, quoted_text: str, comment: str) -> dict:
     """
     Append a review note to the '🪶 Ploma Vermella Review' section at the end of the
@@ -924,6 +982,23 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Book title for the EPUB metadata and default filename.",
     )
 
+    p_review_copy = sub.add_parser(
+        "review-copy",
+        help="Copy a Google Doc into a folder with a dated title and clear its PV review section.",
+    )
+    p_review_copy.add_argument("doc", metavar="DOC_URL")
+    p_review_copy.add_argument("folder", metavar="FOLDER_URL")
+    p_review_copy.add_argument(
+        "--suffix",
+        default=None,
+        help="Title suffix template, supports {date}. Default: ' - DRAFT {date}'.",
+    )
+    p_review_copy.add_argument(
+        "--keep-review-section",
+        action="store_true",
+        help="Don't clear the PV review section in the new copy.",
+    )
+
     p_mv = sub.add_parser("mv", help="Move a Google Doc into a Drive folder.")
     p_mv.add_argument("doc", metavar="DOC_URL")
     p_mv.add_argument("folder", metavar="FOLDER_URL")
@@ -953,6 +1028,13 @@ def main() -> None:
         result = append_content(args.doc, args.heading, args.text)
     elif args.command == "build-epub":
         result = build_epub(args.docs, output=args.output, title=args.title)
+    elif args.command == "review-copy":
+        result = make_review_copy(
+            args.doc,
+            args.folder,
+            suffix_template=args.suffix,
+            clear_pv_review_section=not args.keep_review_section,
+        )
     elif args.command == "mv":
         result = move_document(args.doc, args.folder)
     elif args.command == "cp":

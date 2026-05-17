@@ -11,6 +11,7 @@ from pv import (
     _extract_text,
     _paragraph_location,
     _parse_append_blocks,
+    _review_copy_title,
     _slugify,
 )
 
@@ -196,6 +197,23 @@ def test_default_epub_output_path_includes_date_suffix():
         stamp=datetime(2026, 3, 24, 10, 30),
     )
     assert str(path) == "dist/example-book-20260324.epub"
+
+
+def test_review_copy_title_appends_iso_date_suffix():
+    title = _review_copy_title(
+        "Chapter 10: Buy vs Build vs Grow",
+        stamp=datetime(2026, 4, 6, 9, 0),
+    )
+    assert title == "Chapter 10: Buy vs Build vs Grow - DRAFT 2026-04-06"
+
+
+def test_review_copy_title_supports_custom_template():
+    title = _review_copy_title(
+        "Introduction",
+        stamp=datetime(2026, 4, 6, 9, 0),
+        suffix_template=" ({date} review)",
+    )
+    assert title == "Introduction (2026-04-06 review)"
 
 
 def test_blocks_to_xhtml_renders_list_and_headings():
