@@ -53,7 +53,7 @@ def _get_credentials() -> Credentials:
             creds.refresh(Request())
         else:
             flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRET), SCOPES)
-            creds = flow.run_local_server(port=0)
+            creds = flow.run_local_server(port=0, prompt="select_account")
         CREDENTIALS_DIR.mkdir(parents=True, exist_ok=True)
         TOKEN_FILE.write_text(creds.to_json())
     return creds
