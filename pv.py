@@ -506,13 +506,18 @@ def copy_document(
     }
 
 
-def fetch_document(doc_id_or_url: str) -> dict:
-    """Return {title, text, comments} for the given Google Doc."""
+def fetch_document(doc_id_or_url: str, include_resolved: bool = False) -> dict:
+    """
+    Return {title, text, comments} for the given Google Doc.
+
+    By default, resolved comments are filtered out. Pass include_resolved=True
+    to include them; each comment carries a `resolved` boolean either way.
+    """
     doc_id = _extract_doc_id(doc_id_or_url)
     doc = _docs_service().documents().get(documentId=doc_id).execute()
     result = _drive_service().comments().list(
         fileId=doc_id,
-        fields="comments(author,content,quotedFileContent)",
+        fields="comments(author,content,quotedFileContent,resolved)",
         includeDeleted=False,
     ).execute()
     comments = [
@@ -520,8 +525,10 @@ def fetch_document(doc_id_or_url: str) -> dict:
             "author": c.get("author", {}).get("displayName", ""),
             "content": c.get("content", ""),
             "quoted_text": c.get("quotedFileContent", {}).get("value", ""),
+            "resolved": c.get("resolved", False),
         }
         for c in result.get("comments", [])
+        if include_resolved or not c.get("resolved", False)
     ]
     return {
         "title": doc.get("title", ""),
@@ -938,8 +945,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "folder", metavar="FOLDER_URL"
     )
 
-    sub.add_parser("fetch", help="Fetch the title and text of a Google Doc.").add_argument(
-        "doc", metavar="DOC_URL"
+    p_fetch = sub.add_parser("fetch", help="Fetch the title and text of a Google Doc.")
+    p_fetch.add_argument("doc", metavar="DOC_URL")
+    p_fetch.add_argument(
+        "--include-resolved",
+        action="store_true",
+        help="Include resolved comments in the output (default: skip them).",
     )
 
     sub.add_parser("clear", help="Delete the Ploma Vermella Review section.").add_argument(
@@ -1021,7 +1032,7 @@ def main() -> None:
     if args.command == "list":
         result = list_folder(args.folder)
     elif args.command == "fetch":
-        result = fetch_document(args.doc)
+        result = fetch_document(args.doc, include_resolved=args.include_resolved)
     elif args.command == "clear":
         result = clear_review_section(args.doc)
     elif args.command == "append":
