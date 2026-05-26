@@ -26,6 +26,8 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
 .venv/bin/pv mv <doc-url> <folder-url>                 # move a doc into a folder
 .venv/bin/pv cp <doc-url> <folder-url> [--name NAME]   # copy a doc into a folder
 .venv/bin/pv review-copy <doc-url> <folder-url>        # copy with dated title, clear review section
+.venv/bin/pv edit <doc-url> <old> <new> [--all]        # replace text in the doc body
+.venv/bin/pv resolve <doc-url> <comment-id>            # resolve a comment
 ```
 
 All commands output JSON. Use `.venv/bin/pv -h` or `.venv/bin/pv <command> -h` for help.

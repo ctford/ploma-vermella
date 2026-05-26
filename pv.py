@@ -517,11 +517,12 @@ def fetch_document(doc_id_or_url: str, include_resolved: bool = False) -> dict:
     doc = _docs_service().documents().get(documentId=doc_id).execute()
     result = _drive_service().comments().list(
         fileId=doc_id,
-        fields="comments(author,content,quotedFileContent,resolved)",
+        fields="comments(id,author,content,quotedFileContent,resolved)",
         includeDeleted=False,
     ).execute()
     comments = [
         {
+            "id": c.get("id", ""),
             "author": c.get("author", {}).get("displayName", ""),
             "content": c.get("content", ""),
             "quoted_text": c.get("quotedFileContent", {}).get("value", ""),
@@ -535,6 +536,88 @@ def fetch_document(doc_id_or_url: str, include_resolved: bool = False) -> dict:
         "text": _extract_text(doc),
         "comments": comments,
     }
+
+
+def resolve_comment(doc_id_or_url: str, comment_id: str) -> dict:
+    """Resolve a comment by posting a reply with action=resolve."""
+    doc_id = _extract_doc_id(doc_id_or_url)
+    _drive_service().replies().create(
+        fileId=doc_id,
+        commentId=comment_id,
+        body={"action": "resolve"},
+        fields="id,action",
+    ).execute()
+    return {"status": "resolved", "comment_id": comment_id}
+
+
+def edit_document(
+    doc_id_or_url: str,
+    old: str,
+    new: str,
+    all_occurrences: bool = False,
+) -> dict:
+    """
+    Replace text in a Google Doc.
+
+    By default, requires exactly one match for `old` in the body. Pass
+    all_occurrences=True to replace every occurrence. Edits are applied in
+    reverse-index order so earlier inserts don't shift later positions.
+    """
+    doc_id = _extract_doc_id(doc_id_or_url)
+    service = _docs_service()
+    doc = service.documents().get(documentId=doc_id).execute()
+
+    runs = []  # (utf16_start_in_doc, text)
+    for el in doc.get("body", {}).get("content", []):
+        para = el.get("paragraph")
+        if not para:
+            continue
+        for pe in para.get("elements", []):
+            tr = pe.get("textRun")
+            if tr:
+                runs.append((pe["startIndex"], tr.get("content", "")))
+
+    flat = "".join(t for _, t in runs)
+
+    def doc_index_at(flat_pos: int) -> int:
+        pos = 0
+        for start, text in runs:
+            if pos + len(text) > flat_pos:
+                return start + (flat_pos - pos)
+            pos += len(text)
+        raise IndexError(f"flat position {flat_pos} out of range")
+
+    matches = []
+    search_from = 0
+    while True:
+        idx = flat.find(old, search_from)
+        if idx == -1:
+            break
+        matches.append(idx)
+        search_from = idx + len(old)
+
+    if not matches:
+        raise ValueError(f"no match for {old!r}")
+    if len(matches) > 1 and not all_occurrences:
+        contexts = [
+            flat[max(0, m - 40):m + len(old) + 40].replace("\n", " ")
+            for m in matches
+        ]
+        listing = "\n".join(f"  {i+1}. ...{c}..." for i, c in enumerate(contexts))
+        raise ValueError(
+            f"{len(matches)} matches for {old!r}; pass all_occurrences=True "
+            f"to replace all, or narrow the search string:\n{listing}"
+        )
+
+    requests = []
+    for flat_pos in sorted(matches, reverse=True):
+        start = doc_index_at(flat_pos)
+        end = start + _utf16_len(old)
+        requests.append({"deleteContentRange": {"range": {"startIndex": start, "endIndex": end}}})
+        requests.append({"insertText": {"location": {"index": start}, "text": new}})
+
+    service.documents().batchUpdate(documentId=doc_id, body={"requests": requests}).execute()
+    return {"status": "edited", "occurrences_replaced": len(matches), "old": old, "new": new}
 
 
 def build_epub(
@@ -1022,6 +1105,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Name for the copy. Defaults to the source document's name.",
     )
 
+    p_resolve = sub.add_parser("resolve", help="Resolve a comment on a Google Doc.")
+    p_resolve.add_argument("doc", metavar="DOC_URL")
+    p_resolve.add_argument("comment_id", metavar="COMMENT_ID",
+                           help="Comment ID (use `pv fetch` to list ids).")
+
+    p_edit = sub.add_parser("edit", help="Replace text in a Google Doc body.")
+    p_edit.add_argument("doc", metavar="DOC_URL")
+    p_edit.add_argument("old", metavar="OLD", help="Text to replace.")
+    p_edit.add_argument("new", metavar="NEW", help="Replacement text.")
+    p_edit.add_argument(
+        "--all",
+        action="store_true",
+        dest="all_occurrences",
+        help="Replace every occurrence. Default: require exactly one match.",
+    )
+
     return parser
 
 
@@ -1050,6 +1149,10 @@ def main() -> None:
         result = move_document(args.doc, args.folder)
     elif args.command == "cp":
         result = copy_document(args.doc, args.folder, name=args.name)
+    elif args.command == "resolve":
+        result = resolve_comment(args.doc, args.comment_id)
+    elif args.command == "edit":
+        result = edit_document(args.doc, args.old, args.new, all_occurrences=args.all_occurrences)
     else:
         result = append_review_note(args.doc, args.quoted_text, args.comment)
 
