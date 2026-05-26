@@ -550,6 +550,45 @@ def resolve_comment(doc_id_or_url: str, comment_id: str) -> dict:
     return {"status": "resolved", "comment_id": comment_id}
 
 
+def resolve_all_comments(doc_id_or_url: str) -> dict:
+    """Resolve every unresolved comment on the document."""
+    doc_id = _extract_doc_id(doc_id_or_url)
+    service = _drive_service()
+    listing = service.comments().list(
+        fileId=doc_id,
+        fields="comments(id,resolved)",
+        includeDeleted=False,
+    ).execute()
+    unresolved = [c["id"] for c in listing.get("comments", []) if not c.get("resolved")]
+    for comment_id in unresolved:
+        service.replies().create(
+            fileId=doc_id,
+            commentId=comment_id,
+            body={"action": "resolve"},
+            fields="id",
+        ).execute()
+    return {"status": "resolved_all", "count": len(unresolved), "comment_ids": unresolved}
+
+
+def comment_document(doc_id_or_url: str, quoted_text: str, comment: str) -> dict:
+    """Create an anchored sidebar comment with quoted-text context."""
+    doc_id = _extract_doc_id(doc_id_or_url)
+    created = _drive_service().comments().create(
+        fileId=doc_id,
+        body={
+            "content": comment,
+            "quotedFileContent": {"mimeType": "text/plain", "value": quoted_text},
+        },
+        fields="id,content,quotedFileContent",
+    ).execute()
+    return {
+        "status": "created",
+        "id": created.get("id"),
+        "content": created.get("content", ""),
+        "quoted_text": created.get("quotedFileContent", {}).get("value", ""),
+    }
+
+
 def edit_document(
     doc_id_or_url: str,
     old: str,
@@ -614,7 +653,8 @@ def edit_document(
         start = doc_index_at(flat_pos)
         end = start + _utf16_len(old)
         requests.append({"deleteContentRange": {"range": {"startIndex": start, "endIndex": end}}})
-        requests.append({"insertText": {"location": {"index": start}, "text": new}})
+        if new:
+            requests.append({"insertText": {"location": {"index": start}, "text": new}})
 
     service.documents().batchUpdate(documentId=doc_id, body={"requests": requests}).execute()
     return {"status": "edited", "occurrences_replaced": len(matches), "old": old, "new": new}
@@ -1110,6 +1150,18 @@ def _build_parser() -> argparse.ArgumentParser:
     p_resolve.add_argument("comment_id", metavar="COMMENT_ID",
                            help="Comment ID (use `pv fetch` to list ids).")
 
+    p_resolve_all = sub.add_parser("resolve-all", help="Resolve every unresolved comment on a doc.")
+    p_resolve_all.add_argument("doc", metavar="DOC_URL")
+
+    p_comment = sub.add_parser(
+        "comment",
+        help="Create an anchored sidebar comment with quoted-text context.",
+    )
+    p_comment.add_argument("doc", metavar="DOC_URL")
+    p_comment.add_argument("quoted_text", metavar="QUOTED_TEXT",
+                           help="Text the comment is anchored to (shown in the sidebar).")
+    p_comment.add_argument("comment", metavar="COMMENT", help="Comment body text.")
+
     p_edit = sub.add_parser("edit", help="Replace text in a Google Doc body.")
     p_edit.add_argument("doc", metavar="DOC_URL")
     p_edit.add_argument("old", metavar="OLD", help="Text to replace.")
@@ -1151,6 +1203,10 @@ def main() -> None:
         result = copy_document(args.doc, args.folder, name=args.name)
     elif args.command == "resolve":
         result = resolve_comment(args.doc, args.comment_id)
+    elif args.command == "resolve-all":
+        result = resolve_all_comments(args.doc)
+    elif args.command == "comment":
+        result = comment_document(args.doc, args.quoted_text, args.comment)
     elif args.command == "edit":
         result = edit_document(args.doc, args.old, args.new, all_occurrences=args.all_occurrences)
     else:
