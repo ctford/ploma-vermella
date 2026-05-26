@@ -515,11 +515,28 @@ def fetch_document(doc_id_or_url: str, include_resolved: bool = False) -> dict:
     """
     doc_id = _extract_doc_id(doc_id_or_url)
     doc = _docs_service().documents().get(documentId=doc_id).execute()
-    result = _drive_service().comments().list(
-        fileId=doc_id,
-        fields="comments(id,author,content,quotedFileContent,resolved)",
-        includeDeleted=False,
-    ).execute()
+
+    service = _drive_service()
+    raw_comments: list[dict] = []
+    page_token = None
+    while True:
+        kwargs: dict = {
+            "fileId": doc_id,
+            "fields": (
+                "comments(id,author,content,quotedFileContent,resolved),"
+                "nextPageToken"
+            ),
+            "includeDeleted": False,
+            "pageSize": 100,
+        }
+        if page_token:
+            kwargs["pageToken"] = page_token
+        result = service.comments().list(**kwargs).execute()
+        raw_comments.extend(result.get("comments", []))
+        page_token = result.get("nextPageToken")
+        if not page_token:
+            break
+
     comments = [
         {
             "id": c.get("id", ""),
@@ -528,7 +545,7 @@ def fetch_document(doc_id_or_url: str, include_resolved: bool = False) -> dict:
             "quoted_text": c.get("quotedFileContent", {}).get("value", ""),
             "resolved": c.get("resolved", False),
         }
-        for c in result.get("comments", [])
+        for c in raw_comments
         if include_resolved or not c.get("resolved", False)
     ]
     return {
