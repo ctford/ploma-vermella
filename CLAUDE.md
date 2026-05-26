@@ -44,6 +44,14 @@ When asked to review a chapter:
 5. Run `pv clear <doc-url>` to remove any previous review section
 6. For each issue found, run `pv note <doc-url> <quoted-text> <comment>` — `quoted_text` must be an exact substring of the document text. The `comment` should be self-contained: when the problem is a specific word or phrase, quote it inside the comment (e.g. `"Draft placeholder: \"Something something\" — expand or cut"`) so the reader knows exactly what to fix without needing to hunt for the highlighted text.
 
+## Acting on Review Feedback
+
+When working through review notes (PV bullets or sidebar comments), classify each into one of three tiers and act accordingly:
+
+- **Mechanical fix** (typo, US-vs-UK spelling, missing comma, hyphenation, term-rename, unambiguous text substitution): batch with sibling mechanical fixes and apply via `pv edit`. Show the user a single report listing every fix that landed (or skipped, with reason). Don't ask per-fix permission.
+- **Judgement fix** (single text edit that requires per-instance judgement — sentence rewrite, citation reformat, voice recast): propose one at a time as a `before → after` diff in chat. Apply only after the user says so. Do not batch.
+- **Discussion fix** (structural, ambiguous, or open-ended — section reorganisation, "consider splitting", "feels long", or notes the reviewer flagged as questions): leave alone unless the user explicitly asks. If a discussion fix can be reframed as a mechanical or judgement fix, propose the conversion; otherwise it stays as an open comment.
+
 ## What Not to Commit
 
 Never commit:
