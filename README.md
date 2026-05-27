@@ -21,12 +21,16 @@ sh install-hooks.sh
 2. Enable APIs:
    - **Google Docs API**
    - **Google Drive API**
+   - **Google Slides API**
+   - **Google Sheets API**
 3. Go to **APIs & Services → Credentials → Create Credentials → OAuth 2.0 Client ID**.
    - Application type: **Desktop app**
    - Download the JSON and save it as `credentials/client_secret.json`.
 4. Under **OAuth consent screen**, add your Google account as a test user.
 
 On first use, a browser window will open for OAuth authorisation. The token is cached at `credentials/token.json`.
+
+If you add APIs or OAuth scopes later, move `credentials/token.json` aside and rerun a `pv` command to force reauthorisation.
 
 ---
 
@@ -45,8 +49,30 @@ source .venv/bin/activate
 pv list <folder-url>                        # list docs in a Drive folder
 pv fetch <doc-url>                          # fetch title + text of a doc
 pv note <doc-url> <quoted-text> <comment>   # append a review note
+pv slides-fetch <presentation-url>          # fetch slide text from a deck
+pv slides-thumb <presentation-url> <page-id> # get a slide thumbnail URL
+pv sheet-fetch <sheet-url> --range ...      # read sheet rows by range
+pv sheet-update <sheet-url> <range> ...     # write sheet rows from JSON
+pv figure-map <doc-url>                     # inspect image neighborhoods in a doc
+pv replace-block <doc-url> <start> <end> ... # replace one body-element block safely
+pv insert-image <doc-url> <body-index> ...  # restore an inline image at a body index
 pv build-epub <doc-url> <doc-url> ...       # build an EPUB from multiple docs into dist/ with a date suffix
 ```
+
+## Figure Workflow
+
+Use the Slides deck as the source of truth for image assets, the Google Doc as the source of truth for current placement, and (optionally) a Google Sheet as the source of truth for logged figure metadata.
+
+Recommended workflow for figure cleanup:
+
+1. `pv figure-map <doc-url>` to identify each inline image and the surrounding prose/caption block.
+2. `pv slides-fetch <presentation-url>` to inspect slide text and locate the matching source slide.
+3. `pv slides-thumb <presentation-url> <page-id>` if you need a stable image URL for reinsertion.
+4. Fix one figure block at a time with `pv replace-block`, then verify by re-running `pv figure-map`.
+5. If an image is missing, restore it with `pv insert-image <doc-url> <body-index> <image-url>`.
+6. Once the chapter is stable, update any publisher-facing figure-tracking sheet with `pv sheet-update`.
+
+This is intentionally slower than a bulk edit, but it avoids index drift in Google Docs.
 
 ---
 

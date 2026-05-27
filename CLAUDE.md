@@ -21,6 +21,13 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
 ```
 .venv/bin/pv list <folder-url>                         # list docs in a Drive folder
 .venv/bin/pv fetch <doc-url>                           # fetch title + text of a doc
+.venv/bin/pv slides-fetch <presentation-url>           # fetch slide text from a deck
+.venv/bin/pv slides-thumb <presentation-url> <page-id> # get a slide thumbnail URL
+.venv/bin/pv sheet-fetch <sheet-url> [--range A1...]   # read sheet metadata or rows
+.venv/bin/pv sheet-update <sheet-url> <range> <json>   # write rows to a sheet range
+.venv/bin/pv figure-map <doc-url>                      # list image neighborhoods in a doc
+.venv/bin/pv replace-block <doc-url> <start> <end> ... # replace one body-element block
+.venv/bin/pv insert-image <doc-url> <body-index> ...   # insert an inline image
 .venv/bin/pv note <doc-url> <quoted-text> <comment>    # append to the review section
 .venv/bin/pv clear <doc-url>                           # remove the review section
 .venv/bin/pv mv <doc-url> <folder-url>                 # move a doc into a folder
@@ -52,6 +59,20 @@ When working through review notes (PV bullets or sidebar comments), classify eac
 - **Judgement fix** (single text edit that requires per-instance judgement — sentence rewrite, citation reformat, voice recast): propose one at a time as a `before → after` diff in chat. Apply only after the user says so. Do not batch.
 - **Discussion fix** (structural, ambiguous, or open-ended — section reorganisation, "consider splitting", "feels long", or notes the reviewer flagged as questions): leave alone unless the user explicitly asks. If a discussion fix can be reframed as a mechanical or judgement fix, propose the conversion; otherwise it stays as an open comment.
 
+## Figure Editing Workflow
+
+When fixing figures, avoid broad Google Docs `batchUpdate` edits over multiple figures. Those are fragile because document indices shift after each insertion or deletion.
+
+Use this workflow instead:
+1. Run `pv figure-map <doc-url>` and work from the reported `body_index` neighborhoods rather than cached raw indices.
+2. Inspect one figure at a time: lead-in paragraph, image paragraph, caption paragraph, following paragraph.
+3. Use `pv replace-block` for local prose/caption cleanup around that single figure block.
+4. Use `pv slides-fetch` and `pv slides-thumb` to match the source slide and retrieve a reinsertion URL when needed.
+5. Use `pv insert-image` only when the image itself is missing.
+6. Re-run `pv figure-map` after each figure to verify the local block before moving on.
+
+For book-specific resources (deck URLs, figure logs, publisher-facing tracking sheets, intake conventions for third-party images), check `context/<book-slug>/figures.md` if present.
+
 ## What Not to Commit
 
 Never commit:
@@ -71,7 +92,7 @@ Google Docs does not expose text-anchored comment creation via any public API (D
 python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]" && sh install-hooks.sh
 ```
 
-Credentials: Google Cloud project with Docs API + Drive API enabled, OAuth 2.0 Desktop credentials saved as `credentials/client_secret.json`. First run opens a browser for authorisation; token cached at `credentials/token.json`.
+Credentials: Google Cloud project with Docs API, Drive API, Slides API, and Sheets API enabled, OAuth 2.0 Desktop credentials saved as `credentials/client_secret.json`. First run opens a browser for authorisation; token cached at `credentials/token.json`.
 
 ## OAuth Reauth
 

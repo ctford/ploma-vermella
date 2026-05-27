@@ -17,6 +17,8 @@ from googleapiclient.discovery import build
 SCOPES = [
     "https://www.googleapis.com/auth/documents",
     "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/presentations.readonly",
+    "https://www.googleapis.com/auth/spreadsheets",
 ]
 
 CREDENTIALS_DIR = Path(__file__).parent / "credentials"
@@ -25,12 +27,26 @@ TOKEN_FILE = CREDENTIALS_DIR / "token.json"
 
 _DOC_URL_RE = re.compile(r"/document/d/([a-zA-Z0-9_-]+)")
 _FOLDER_URL_RE = re.compile(r"/folders/([a-zA-Z0-9_-]+)")
+_PRESENTATION_URL_RE = re.compile(r"/presentation/d/([a-zA-Z0-9_-]+)")
+_SPREADSHEET_URL_RE = re.compile(r"/spreadsheets/d/([a-zA-Z0-9_-]+)")
 
 
 def _extract_doc_id(doc_id_or_url: str) -> str:
     """Return bare doc ID whether given a full URL or already a bare ID."""
     m = _DOC_URL_RE.search(doc_id_or_url)
     return m.group(1) if m else doc_id_or_url.strip()
+
+
+def _extract_presentation_id(presentation_id_or_url: str) -> str:
+    """Return bare presentation ID whether given a full URL or already bare."""
+    m = _PRESENTATION_URL_RE.search(presentation_id_or_url)
+    return m.group(1) if m else presentation_id_or_url.strip()
+
+
+def _extract_spreadsheet_id(spreadsheet_id_or_url: str) -> str:
+    """Return bare spreadsheet ID whether given a full URL or already bare."""
+    m = _SPREADSHEET_URL_RE.search(spreadsheet_id_or_url)
+    return m.group(1) if m else spreadsheet_id_or_url.strip()
 
 
 def _review_copy_title(
@@ -67,6 +83,14 @@ def _drive_service():
     return build("drive", "v3", credentials=_get_credentials())
 
 
+def _slides_service():
+    return build("slides", "v1", credentials=_get_credentials())
+
+
+def _sheets_service():
+    return build("sheets", "v4", credentials=_get_credentials())
+
+
 _HEADING_STYLES = {"HEADING_1", "HEADING_2", "HEADING_3", "HEADING_4", "TITLE"}
 _REVIEW_HEADING = "🪶 Ploma Vermella Review"
 _EPUB_NS = "http://www.idpf.org/2007/ops"
@@ -83,6 +107,76 @@ def _parse_table_row(line: str) -> list[str]:
     if not (text.startswith("|") and text.endswith("|")):
         raise ValueError(f"not a pipe table row: {line!r}")
     return [cell.strip() for cell in text[1:-1].split("|")]
+
+
+def _shape_text(element: dict) -> str:
+    """Return concatenated visible text from a Google Slides shape element."""
+    shape = element.get("shape", {})
+    runs = []
+    for text_element in shape.get("text", {}).get("textElements", []):
+        text_run = text_element.get("textRun")
+        if text_run:
+            runs.append(text_run.get("content", ""))
+    return "".join(runs).strip()
+
+
+def _paragraph_text(element: dict) -> str:
+    """Return concatenated paragraph text for a body element."""
+    paragraph = element.get("paragraph", {})
+    return "".join(
+        pe.get("textRun", {}).get("content", "")
+        for pe in paragraph.get("elements", [])
+    )
+
+
+def _is_image_paragraph(element: dict) -> bool:
+    """Return True when a body element paragraph contains an inline image."""
+    paragraph = element.get("paragraph", {})
+    return any(pe.get("inlineObjectElement") for pe in paragraph.get("elements", []))
+
+
+def _figure_map_from_doc(doc: dict) -> list[dict]:
+    """Return inline-image neighborhoods keyed by body element index."""
+    content = doc.get("body", {}).get("content", [])
+    figures = []
+    for index, element in enumerate(content):
+        if not _is_image_paragraph(element):
+            continue
+        prev_text = ""
+        next_text = ""
+        caption_text = ""
+
+        if index > 0:
+            prev_text = _paragraph_text(content[index - 1]).strip()
+
+        scan = index + 1
+        while scan < len(content):
+            candidate = _paragraph_text(content[scan]).strip()
+            if candidate:
+                next_text = candidate
+                break
+            scan += 1
+
+        if next_text.startswith("Figure ") or next_text.startswith("Listing "):
+            caption_text = next_text
+            scan += 1
+            next_text = ""
+            while scan < len(content):
+                candidate = _paragraph_text(content[scan]).strip()
+                if candidate:
+                    next_text = candidate
+                    break
+                scan += 1
+
+        figures.append({
+            "body_index": index,
+            "start_index": element.get("startIndex"),
+            "end_index": element.get("endIndex"),
+            "prev_text": prev_text,
+            "caption_text": caption_text,
+            "next_text": next_text,
+        })
+    return figures
 
 
 def _is_table_separator(line: str, columns: int) -> bool:
@@ -503,6 +597,194 @@ def copy_document(
         "name": copied["name"],
         "parents": copied.get("parents", []),
         "url": copied.get("webViewLink", f"https://docs.google.com/document/d/{copied['id']}"),
+    }
+
+
+def fetch_presentation(presentation_id_or_url: str) -> dict:
+    """Return slide text content from a Google Slides presentation."""
+    presentation_id = _extract_presentation_id(presentation_id_or_url)
+    presentation = _slides_service().presentations().get(
+        presentationId=presentation_id
+    ).execute()
+    slides = []
+    for index, slide in enumerate(presentation.get("slides", []), start=1):
+        texts = []
+        for element in slide.get("pageElements", []):
+            text = _shape_text(element)
+            if text:
+                texts.append(text)
+        slides.append({
+            "index": index,
+            "object_id": slide.get("objectId", ""),
+            "speaker_notes_object_id": slide.get("slideProperties", {})
+            .get("notesPage", {})
+            .get("objectId", ""),
+            "texts": texts,
+        })
+    return {
+        "title": presentation.get("title", ""),
+        "slides": slides,
+    }
+
+
+def presentation_thumbnail(
+    presentation_id_or_url: str,
+    page_object_id: str,
+    size: str = "LARGE",
+) -> dict:
+    """Return a Google Slides page thumbnail URL."""
+    presentation_id = _extract_presentation_id(presentation_id_or_url)
+    result = _slides_service().presentations().pages().getThumbnail(
+        presentationId=presentation_id,
+        pageObjectId=page_object_id,
+        thumbnailProperties_thumbnailSize=size,
+    ).execute()
+    return {
+        "presentation_id": presentation_id,
+        "page_object_id": page_object_id,
+        "size": size,
+        "content_url": result.get("contentUrl", ""),
+        "width": result.get("width"),
+        "height": result.get("height"),
+    }
+
+
+def fetch_sheet(spreadsheet_id_or_url: str, range_name: str | None = None) -> dict:
+    """Return sheet metadata and values for an optional range."""
+    spreadsheet_id = _extract_spreadsheet_id(spreadsheet_id_or_url)
+    service = _sheets_service()
+    spreadsheet = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    result = {
+        "title": spreadsheet.get("properties", {}).get("title", ""),
+        "spreadsheet_id": spreadsheet_id,
+        "sheets": [
+            {
+                "title": sheet.get("properties", {}).get("title", ""),
+                "sheet_id": sheet.get("properties", {}).get("sheetId"),
+                "index": sheet.get("properties", {}).get("index"),
+            }
+            for sheet in spreadsheet.get("sheets", [])
+        ],
+    }
+    if range_name:
+        values = service.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range=range_name,
+        ).execute()
+        result["range"] = values.get("range", range_name)
+        result["values"] = values.get("values", [])
+    return result
+
+
+def update_sheet(
+    spreadsheet_id_or_url: str,
+    range_name: str,
+    values: list[list[str]],
+) -> dict:
+    """Write a rectangular value matrix to a Google Sheet range."""
+    spreadsheet_id = _extract_spreadsheet_id(spreadsheet_id_or_url)
+    updated = _sheets_service().spreadsheets().values().update(
+        spreadsheetId=spreadsheet_id,
+        range=range_name,
+        valueInputOption="USER_ENTERED",
+        body={"values": values},
+    ).execute()
+    return {
+        "status": "updated",
+        "spreadsheet_id": spreadsheet_id,
+        "updated_range": updated.get("updatedRange", range_name),
+        "updated_rows": updated.get("updatedRows", 0),
+        "updated_columns": updated.get("updatedColumns", 0),
+        "updated_cells": updated.get("updatedCells", 0),
+    }
+
+
+def figure_map(doc_id_or_url: str) -> dict:
+    """Return inline-image neighborhoods for a Google Doc."""
+    doc_id = _extract_doc_id(doc_id_or_url)
+    doc = _docs_service().documents().get(documentId=doc_id).execute()
+    return {
+        "title": doc.get("title", ""),
+        "figures": _figure_map_from_doc(doc),
+    }
+
+
+def replace_body_range(
+    doc_id_or_url: str,
+    start_body_index: int,
+    end_body_index: int,
+    text: str,
+) -> dict:
+    """
+    Replace a contiguous body-element range with text.
+
+    Body indexes are looked up fresh at execution time, which is safer than
+    carrying raw document indices across multiple edits.
+    """
+    doc_id = _extract_doc_id(doc_id_or_url)
+    doc = _docs_service().documents().get(documentId=doc_id).execute()
+    content = doc.get("body", {}).get("content", [])
+    if start_body_index < 0 or end_body_index < start_body_index:
+        raise ValueError("invalid body index range")
+    if end_body_index >= len(content):
+        raise ValueError(f"body index {end_body_index} out of range")
+
+    start_index = content[start_body_index].get("startIndex")
+    end_index = content[end_body_index].get("endIndex")
+    requests = [{
+        "deleteContentRange": {
+            "range": {"startIndex": start_index, "endIndex": end_index}
+        }
+    }]
+    if text:
+        requests.append({
+            "insertText": {"location": {"index": start_index}, "text": text}
+        })
+    _docs_service().documents().batchUpdate(
+        documentId=doc_id,
+        body={"requests": requests},
+    ).execute()
+    return {
+        "status": "replaced",
+        "start_body_index": start_body_index,
+        "end_body_index": end_body_index,
+        "text": text,
+    }
+
+
+def insert_image_at_body_index(
+    doc_id_or_url: str,
+    body_index: int,
+    image_url: str,
+    width_pt: float = 468.0,
+    height_pt: float = 263.25,
+) -> dict:
+    """Insert an inline image at the start index of the given body element."""
+    doc_id = _extract_doc_id(doc_id_or_url)
+    doc = _docs_service().documents().get(documentId=doc_id).execute()
+    content = doc.get("body", {}).get("content", [])
+    if body_index < 0 or body_index >= len(content):
+        raise ValueError(f"body index {body_index} out of range")
+    location = content[body_index].get("startIndex")
+    _docs_service().documents().batchUpdate(
+        documentId=doc_id,
+        body={"requests": [{
+            "insertInlineImage": {
+                "location": {"index": location},
+                "uri": image_url,
+                "objectSize": {
+                    "width": {"magnitude": width_pt, "unit": "PT"},
+                    "height": {"magnitude": height_pt, "unit": "PT"},
+                },
+            }
+        }]},
+    ).execute()
+    return {
+        "status": "inserted_image",
+        "body_index": body_index,
+        "image_url": image_url,
+        "width_pt": width_pt,
+        "height_pt": height_pt,
     }
 
 
@@ -1093,6 +1375,74 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Include resolved comments in the output (default: skip them).",
     )
 
+    p_slides = sub.add_parser(
+        "slides-fetch",
+        help="Fetch slide text from a Google Slides presentation.",
+    )
+    p_slides.add_argument("presentation", metavar="PRESENTATION_URL")
+
+    p_slide_thumb = sub.add_parser(
+        "slides-thumb",
+        help="Fetch a Google Slides page thumbnail URL.",
+    )
+    p_slide_thumb.add_argument("presentation", metavar="PRESENTATION_URL")
+    p_slide_thumb.add_argument("page_object_id", metavar="PAGE_OBJECT_ID")
+    p_slide_thumb.add_argument(
+        "--size",
+        default="LARGE",
+        choices=["SMALL", "MEDIUM", "LARGE"],
+        help="Thumbnail size. Default: LARGE.",
+    )
+
+    p_sheet_fetch = sub.add_parser(
+        "sheet-fetch",
+        help="Fetch Google Sheet metadata and optional range values.",
+    )
+    p_sheet_fetch.add_argument("sheet", metavar="SHEET_URL")
+    p_sheet_fetch.add_argument(
+        "--range",
+        dest="range_name",
+        default=None,
+        help="A1 notation range to fetch, e.g. 'Sheet1!A1:G20'.",
+    )
+
+    p_sheet_update = sub.add_parser(
+        "sheet-update",
+        help="Update a Google Sheet range from a JSON matrix.",
+    )
+    p_sheet_update.add_argument("sheet", metavar="SHEET_URL")
+    p_sheet_update.add_argument("range_name", metavar="RANGE")
+    p_sheet_update.add_argument(
+        "values_json",
+        metavar="VALUES_JSON",
+        help='JSON 2D array, e.g. \'[["A1", "B1"], ["A2", "B2"]]\'',
+    )
+
+    p_figure_map = sub.add_parser(
+        "figure-map",
+        help="List inline-image neighborhoods in a Google Doc by body index.",
+    )
+    p_figure_map.add_argument("doc", metavar="DOC_URL")
+
+    p_replace_block = sub.add_parser(
+        "replace-block",
+        help="Replace a contiguous Google Doc body-element range with text.",
+    )
+    p_replace_block.add_argument("doc", metavar="DOC_URL")
+    p_replace_block.add_argument("start_body_index", type=int)
+    p_replace_block.add_argument("end_body_index", type=int)
+    p_replace_block.add_argument("text", metavar="TEXT")
+
+    p_insert_image = sub.add_parser(
+        "insert-image",
+        help="Insert an inline image at a Google Doc body-element index.",
+    )
+    p_insert_image.add_argument("doc", metavar="DOC_URL")
+    p_insert_image.add_argument("body_index", type=int)
+    p_insert_image.add_argument("image_url", metavar="IMAGE_URL")
+    p_insert_image.add_argument("--width-pt", type=float, default=468.0)
+    p_insert_image.add_argument("--height-pt", type=float, default=263.25)
+
     sub.add_parser("clear", help="Delete the Ploma Vermella Review section.").add_argument(
         "doc", metavar="DOC_URL"
     )
@@ -1201,6 +1551,35 @@ def main() -> None:
         result = list_folder(args.folder)
     elif args.command == "fetch":
         result = fetch_document(args.doc, include_resolved=args.include_resolved)
+    elif args.command == "slides-fetch":
+        result = fetch_presentation(args.presentation)
+    elif args.command == "slides-thumb":
+        result = presentation_thumbnail(
+            args.presentation,
+            args.page_object_id,
+            size=args.size,
+        )
+    elif args.command == "sheet-fetch":
+        result = fetch_sheet(args.sheet, range_name=args.range_name)
+    elif args.command == "sheet-update":
+        result = update_sheet(args.sheet, args.range_name, json.loads(args.values_json))
+    elif args.command == "figure-map":
+        result = figure_map(args.doc)
+    elif args.command == "replace-block":
+        result = replace_body_range(
+            args.doc,
+            args.start_body_index,
+            args.end_body_index,
+            args.text,
+        )
+    elif args.command == "insert-image":
+        result = insert_image_at_body_index(
+            args.doc,
+            args.body_index,
+            args.image_url,
+            width_pt=args.width_pt,
+            height_pt=args.height_pt,
+        )
     elif args.command == "clear":
         result = clear_review_section(args.doc)
     elif args.command == "append":

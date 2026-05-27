@@ -8,10 +8,16 @@ from pv import (
     _extract_blocks,
     _extract_doc_id,
     _extract_folder_id,
+    _extract_presentation_id,
+    _extract_spreadsheet_id,
     _extract_text,
+    _figure_map_from_doc,
+    _is_image_paragraph,
     _paragraph_location,
+    _paragraph_text,
     _parse_append_blocks,
     _review_copy_title,
+    _shape_text,
     _slugify,
 )
 
@@ -28,6 +34,25 @@ def test_extract_doc_id_bare():
 
 def test_extract_doc_id_strips_whitespace():
     assert _extract_doc_id("  abc123  ") == "abc123"
+
+
+# ---------------------------------------------------------------------------
+# _extract_presentation_id / _extract_spreadsheet_id
+# ---------------------------------------------------------------------------
+
+def test_extract_presentation_id_from_url():
+    url = "https://docs.google.com/presentation/d/pres123/edit"
+    assert _extract_presentation_id(url) == "pres123"
+
+def test_extract_presentation_id_bare():
+    assert _extract_presentation_id("pres123") == "pres123"
+
+def test_extract_spreadsheet_id_from_url():
+    url = "https://docs.google.com/spreadsheets/d/sheet123/edit#gid=0"
+    assert _extract_spreadsheet_id(url) == "sheet123"
+
+def test_extract_spreadsheet_id_bare():
+    assert _extract_spreadsheet_id("sheet123") == "sheet123"
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +152,66 @@ def test_parse_append_blocks_applies_spacing_before_table():
         "rows": [["A", "B"], ["1", "2"]],
         "space_above": True,
     }
+
+
+def test_shape_text_concatenates_slide_runs():
+    element = {
+        "shape": {
+            "text": {
+                "textElements": [
+                    {"textRun": {"content": "Hello"}},
+                    {"textRun": {"content": " world"}},
+                    {"textRun": {"content": "\n"}},
+                ]
+            }
+        }
+    }
+    assert _shape_text(element) == "Hello world"
+
+
+def test_paragraph_text_concatenates_runs():
+    element = {
+        "paragraph": {
+            "elements": [
+                {"textRun": {"content": "Hello, "}},
+                {"textRun": {"content": "world.\n"}},
+            ]
+        }
+    }
+    assert _paragraph_text(element) == "Hello, world.\n"
+
+
+def test_is_image_paragraph_detects_inline_object():
+    element = {
+        "paragraph": {
+            "elements": [
+                {"inlineObjectElement": {"inlineObjectId": "kix.123"}},
+            ]
+        }
+    }
+    assert _is_image_paragraph(element) is True
+
+
+def test_figure_map_from_doc_reports_neighbor_text():
+    doc = {
+        "body": {
+            "content": [
+                {"paragraph": {"elements": [{"textRun": {"content": "Before figure.\n"}}]}},
+                {"paragraph": {"elements": [{"inlineObjectElement": {"inlineObjectId": "kix.1"}}]},
+                 "startIndex": 14, "endIndex": 16},
+                {"paragraph": {"elements": [{"textRun": {"content": "Figure 1-1. Caption.\n"}}]}},
+                {"paragraph": {"elements": [{"textRun": {"content": "After figure.\n"}}]}},
+            ]
+        }
+    }
+    assert _figure_map_from_doc(doc) == [{
+        "body_index": 1,
+        "start_index": 14,
+        "end_index": 16,
+        "prev_text": "Before figure.",
+        "caption_text": "Figure 1-1. Caption.",
+        "next_text": "After figure.",
+    }]
 
 
 # ---------------------------------------------------------------------------
