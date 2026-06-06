@@ -6,6 +6,17 @@ CLI tool that reviews Google Doc book chapters and posts feedback as comments.
 > is a thin pointer to this file so that Claude Code (and any other AGENTS.md-aware
 > tool) loads the same content.
 
+## Development workflow
+
+- **Trunk-based development.** Commit directly to `main` and keep history linear — no
+  pull requests, no feature branches, no merge commits. The end state should read as a
+  single sequential history.
+- **One change at a time.** Make a change, run the tests, commit it, push it, then start
+  the next. Don't batch unrelated changes into one commit.
+- The pre-commit hook runs `ruff check pv.py tests/` and `pytest tests/`; keep both green.
+  Tests cover pure functions and must use fake IDs/data only.
+- Never commit secrets or private content (see *What Not to Commit*).
+
 ## Files
 
 - `pv.py` — Google Docs/Drive API logic and `pv` CLI entry point
