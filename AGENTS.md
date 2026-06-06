@@ -58,6 +58,7 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
 .venv/bin/pv find <doc-url> <text>                     # locate text: indices, style, is_code, context
 .venv/bin/pv insert-after <doc-url> <anchor> <text>    # insert paragraph(s) after an anchor paragraph
 .venv/bin/pv link <doc-url> <text> <url> [--all]       # hyperlink a span of text
+.venv/bin/pv style <doc-url> <text> [--italic|--bold|--underline|--color HEX] [--all]  # character styling
 .venv/bin/pv comment <doc-url> <quoted-text> <text>    # anchored sidebar comment
 .venv/bin/pv comments <doc-url> [--include-resolved]   # list comments: id, content, quoted text, resolved
 .venv/bin/pv resolve <doc-url> <comment-id>            # resolve a comment

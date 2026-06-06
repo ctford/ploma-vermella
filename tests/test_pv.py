@@ -39,10 +39,12 @@ from pv import (
     _paragraph_location,
     _paragraph_text,
     _parse_append_blocks,
+    _parse_hex_color,
     _parse_table_row,
     _review_copy_title,
     _shape_text,
     _slugify,
+    _style_plan,
     _text_from_elements,
     _title_page_xhtml,
     _utf16_len,
@@ -737,3 +739,31 @@ def test_map_comments_flattens_and_filters_resolved():
     assert both[1] == {
         "id": "b", "author": "", "content": "c2", "quoted_text": "", "resolved": True,
     }
+
+
+def test_parse_hex_color():
+    assert _parse_hex_color("#000000") == {"red": 0.0, "green": 0.0, "blue": 0.0}
+    c = _parse_hex_color("d3002d")
+    assert round(c["red"], 3) == round(211 / 255, 3)
+    assert c["green"] == 0.0
+    assert round(c["blue"], 3) == round(45 / 255, 3)
+    with pytest.raises(ValueError):
+        _parse_hex_color("#fff")
+
+def test_style_plan_builds_request_with_chosen_fields():
+    doc = _fake_doc(_para(1, "see Lean Startup now\n"))
+    requests, spans = _style_plan(doc, "Lean Startup", italic=True, color="#d3002d")
+    style = requests[0]["updateTextStyle"]
+    assert style["range"] == {"startIndex": 5, "endIndex": 17}
+    assert style["textStyle"]["italic"] is True
+    assert "rgbColor" in style["textStyle"]["foregroundColor"]["color"]
+    assert set(style["fields"].split(",")) == {"italic", "foregroundColor"}
+    assert spans == [{"start_index": 5, "end_index": 17}]
+
+def test_style_plan_requires_a_style():
+    with pytest.raises(ValueError):
+        _style_plan(_fake_doc(_para(1, "text\n")), "text")
+
+def test_style_plan_missing_text_raises():
+    with pytest.raises(ValueError):
+        _style_plan(_fake_doc(_para(1, "hello\n")), "zzz", italic=True)

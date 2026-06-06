@@ -293,6 +293,65 @@ def _insert_after_plan(
     return request, body_index
 
 
+def _parse_hex_color(hex_color: str) -> dict:
+    """Parse '#rrggbb' (or 'rrggbb') into a Docs API rgbColor (floats 0..1)."""
+    h = hex_color.lstrip("#")
+    if len(h) != 6:
+        raise ValueError(f"expected a 6-digit hex color, got {hex_color!r}")
+    return {
+        "red": int(h[0:2], 16) / 255,
+        "green": int(h[2:4], 16) / 255,
+        "blue": int(h[4:6], 16) / 255,
+    }
+
+
+def _style_plan(
+    doc: dict,
+    text: str,
+    italic: bool = False,
+    bold: bool = False,
+    underline: bool = False,
+    color: str | None = None,
+    all_occurrences: bool = False,
+) -> tuple[list[dict], list[dict]]:
+    """Build updateTextStyle requests applying character styles to `text`."""
+    style: dict = {}
+    fields: list[str] = []
+    if italic:
+        style["italic"] = True
+        fields.append("italic")
+    if bold:
+        style["bold"] = True
+        fields.append("bold")
+    if underline:
+        style["underline"] = True
+        fields.append("underline")
+    if color:
+        style["foregroundColor"] = {"color": {"rgbColor": _parse_hex_color(color)}}
+        fields.append("foregroundColor")
+    if not fields:
+        raise ValueError("specify at least one of italic, bold, underline, or color")
+
+    matches = _find_matches(doc, text)
+    if not matches:
+        raise ValueError(f"text not found: {text!r}")
+    if len(matches) > 1 and not all_occurrences:
+        raise ValueError(
+            f"text matches {len(matches)} times; make it unique or pass all_occurrences"
+        )
+    targets = matches if all_occurrences else matches[:1]
+    requests = [
+        {"updateTextStyle": {
+            "range": {"startIndex": m["start_index"], "endIndex": m["end_index"]},
+            "textStyle": style,
+            "fields": ",".join(fields),
+        }}
+        for m in targets
+    ]
+    spans = [{"start_index": m["start_index"], "end_index": m["end_index"]} for m in targets]
+    return requests, spans
+
+
 def _link_plan(
     doc: dict, text: str, url: str, all_occurrences: bool = False
 ) -> tuple[list[dict], list[dict]]:
@@ -1348,6 +1407,37 @@ def link_text(
     }
 
 
+def style_text(
+    doc_id_or_url: str,
+    text: str,
+    italic: bool = False,
+    bold: bool = False,
+    underline: bool = False,
+    color: str | None = None,
+    all_occurrences: bool = False,
+) -> dict:
+    """
+    Apply character styling (italic/bold/underline/color) to occurrences of `text`,
+    preserving other styling. Requires exactly one match unless all_occurrences is set.
+    """
+    doc_id = _extract_doc_id(doc_id_or_url)
+    service = _docs_service()
+    doc = service.documents().get(documentId=doc_id).execute()
+    requests, spans = _style_plan(
+        doc, text, italic=italic, bold=bold, underline=underline,
+        color=color, all_occurrences=all_occurrences,
+    )
+    service.documents().batchUpdate(
+        documentId=doc_id, body={"requests": requests}
+    ).execute()
+    return {
+        "status": "styled",
+        "text": text,
+        "occurrences": len(spans),
+        "spans": spans,
+    }
+
+
 def build_epub(
     doc_ids_or_urls: list[str],
     output: str | None = None,
@@ -2067,6 +2157,23 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Link every occurrence. Default: require exactly one match.",
     )
 
+    p_style = sub.add_parser(
+        "style",
+        help="Apply italic/bold/underline/color to a span of text.",
+    )
+    p_style.add_argument("doc", metavar="DOC_URL")
+    p_style.add_argument("text", metavar="TEXT", help="Exact span to style.")
+    p_style.add_argument("--italic", action="store_true")
+    p_style.add_argument("--bold", action="store_true")
+    p_style.add_argument("--underline", action="store_true")
+    p_style.add_argument("--color", metavar="HEX", help="Foreground color, e.g. #d3002d.")
+    p_style.add_argument(
+        "--all",
+        action="store_true",
+        dest="all_occurrences",
+        help="Style every occurrence. Default: require exactly one match.",
+    )
+
     return parser
 
 
@@ -2147,6 +2254,12 @@ def main() -> None:
         result = insert_after(args.doc, args.anchor, args.text, allow_multiple=args.allow_multiple)
     elif args.command == "link":
         result = link_text(args.doc, args.text, args.url, all_occurrences=args.all_occurrences)
+    elif args.command == "style":
+        result = style_text(
+            args.doc, args.text,
+            italic=args.italic, bold=args.bold, underline=args.underline,
+            color=args.color, all_occurrences=args.all_occurrences,
+        )
     else:
         result = append_review_note(args.doc, args.quoted_text, args.comment)
 
