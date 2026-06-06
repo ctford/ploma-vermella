@@ -1,13 +1,21 @@
 """Tests for pv.py — pure functions."""
 
+import inspect
 from datetime import datetime
 
 import pytest
 
 from pv import (
+    _block_html,
     _blocks_to_xhtml,
     _body_element_at,
+    _build_parser,
+    _chapter_filename,
     _default_epub_output_path,
+    _default_epub_title,
+    _doc_index_at,
+    _doc_text_runs,
+    _epub_nav,
     _epub_package,
     _extract_blocks,
     _extract_doc_id,
@@ -19,17 +27,23 @@ from pv import (
     _find_matches,
     _image_content_uri,
     _inline_html,
+    _inline_object_ids,
     _insert_after_plan,
     _is_code_paragraph,
     _is_image_paragraph,
+    _is_table_separator,
     _link_plan,
     _media_extension,
     _paragraph_location,
     _paragraph_text,
     _parse_append_blocks,
+    _parse_table_row,
     _review_copy_title,
     _shape_text,
     _slugify,
+    _text_from_elements,
+    _utf16_len,
+    main,
 )
 
 # ---------------------------------------------------------------------------
@@ -578,3 +592,84 @@ def test_link_plan_ambiguous_requires_all_occurrences():
         _link_plan(doc, "go", "http://e")
     requests, _spans = _link_plan(doc, "go", "http://e", all_occurrences=True)
     assert len(requests) == 2
+
+
+# ---------------------------------------------------------------------------
+# previously-untested pure helpers
+# ---------------------------------------------------------------------------
+
+def test_utf16_len_counts_surrogate_pairs():
+    assert _utf16_len("abc") == 3
+    assert _utf16_len("café") == 4          # é is BMP, one code unit
+    assert _utf16_len("😀") == 2             # astral, surrogate pair
+    assert _utf16_len("a😀b") == 4
+
+def test_parse_table_row_splits_and_strips_cells():
+    assert _parse_table_row("| a | b | c |") == ["a", "b", "c"]
+    with pytest.raises(ValueError):
+        _parse_table_row("not a table row")
+
+def test_is_table_separator_detects_separator_rows():
+    assert _is_table_separator("| --- | --- |", 2) is True
+    assert _is_table_separator("| :-- | --: |", 2) is True
+    assert _is_table_separator("| a | b |", 2) is False     # not dashes
+    assert _is_table_separator("| --- |", 2) is False        # wrong column count
+
+def test_chapter_filename_is_zero_padded():
+    assert _chapter_filename(7) == "chapter-07.xhtml"
+    assert _chapter_filename(12) == "chapter-12.xhtml"
+
+def test_text_from_elements_concatenates_and_strips_trailing_newline():
+    assert _text_from_elements([{"textRun": {"content": "Hello\n"}}]) == "Hello"
+    assert _text_from_elements(
+        [{"textRun": {"content": "a"}}, {"textRun": {"content": "b\n"}}]
+    ) == "ab"
+
+def test_doc_text_runs_and_index_mapping():
+    doc = _fake_doc(_para(1, "abc\n"), _para(5, "de\n"))
+    runs = _doc_text_runs(doc)
+    assert runs == [(1, "abc\n"), (5, "de\n")]
+    assert _doc_index_at(runs, 0) == 1     # first char -> doc index 1
+    assert _doc_index_at(runs, 2) == 3
+    assert _doc_index_at(runs, 4) == 5     # into the second run
+
+def test_doc_index_at_out_of_range_raises():
+    with pytest.raises(IndexError):
+        _doc_index_at([(1, "ab\n")], 99)
+
+def test_inline_object_ids_extracts_image_refs():
+    para = {"paragraph": {"elements": [
+        {"inlineObjectElement": {"inlineObjectId": "kix.a"}},
+        {"textRun": {"content": "x"}},
+        {"inlineObjectElement": {"inlineObjectId": "kix.b"}},
+    ]}}
+    assert _inline_object_ids(para) == ["kix.a", "kix.b"]
+    assert _inline_object_ids({"paragraph": {"elements": [{"textRun": {"content": "x"}}]}}) == []
+
+def test_block_html_prefers_html_else_escapes_text():
+    assert _block_html({"html": "<em>x</em>"}) == "<em>x</em>"
+    assert _block_html({"text": "a & b"}) == "a &amp; b"
+
+def test_epub_nav_lists_chapter_links():
+    nav = _epub_nav("My Book", [{"filename": "chapter-01.xhtml", "title": "Chapter One"}])
+    assert '<a href="chapter-01.xhtml">Chapter One</a>' in nav
+    assert "My Book" in nav
+
+def test_default_epub_title_single_vs_multiple():
+    assert _default_epub_title(["Solo Chapter"]) == "Solo Chapter"
+    assert _default_epub_title(["A", "B"]) == "Ploma Vermella Export"
+
+
+# ---------------------------------------------------------------------------
+# structural check: every CLI subcommand is dispatched in main()
+# ---------------------------------------------------------------------------
+
+def test_every_subcommand_is_dispatched():
+    parser = _build_parser()
+    sub_actions = [a for a in parser._actions if a.__class__.__name__ == "_SubParsersAction"]
+    assert sub_actions, "no subparsers found"
+    names = list(sub_actions[0].choices)
+    src = inspect.getsource(main)
+    # "note" is intentionally the else/default branch in main().
+    missing = [n for n in names if f'"{n}"' not in src and n != "note"]
+    assert not missing, f"subcommands not dispatched in main(): {missing}"
