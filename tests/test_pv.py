@@ -2,8 +2,11 @@
 
 from datetime import datetime
 
+import pytest
+
 from pv import (
     _blocks_to_xhtml,
+    _body_element_at,
     _default_epub_output_path,
     _extract_blocks,
     _extract_doc_id,
@@ -12,7 +15,11 @@ from pv import (
     _extract_spreadsheet_id,
     _extract_text,
     _figure_map_from_doc,
+    _find_matches,
+    _insert_after_plan,
+    _is_code_paragraph,
     _is_image_paragraph,
+    _link_plan,
     _paragraph_location,
     _paragraph_text,
     _parse_append_blocks,
@@ -402,3 +409,100 @@ def test_paragraph_location_stops_at_review_heading():
         }},
     ]}}
     assert _paragraph_location(doc, "Note inside review.") == ""
+
+
+# ---------------------------------------------------------------------------
+# find / insert-after / link helpers (pure planning logic)
+# ---------------------------------------------------------------------------
+
+def _para(start, text, *, style="NORMAL_TEXT", font=None):
+    """Build a fake body paragraph element with consistent indices."""
+    text_style = {"weightedFontFamily": {"fontFamily": font}} if font else {}
+    return {
+        "startIndex": start,
+        "endIndex": start + len(text),
+        "paragraph": {
+            "paragraphStyle": {"namedStyleType": style},
+            "elements": [{
+                "startIndex": start,
+                "endIndex": start + len(text),
+                "textRun": {"content": text, "textStyle": text_style},
+            }],
+        },
+    }
+
+
+def _fake_doc(*paras):
+    return {"body": {"content": list(paras)}}
+
+
+def test_find_matches_locates_span():
+    doc = _fake_doc(_para(1, "The quick brown fox\n"), _para(21, "jumps over\n"))
+    matches = _find_matches(doc, "brown")
+    assert len(matches) == 1
+    m = matches[0]
+    assert m["start_index"] == 11
+    assert m["end_index"] == 16
+    assert m["body_index"] == 0
+    assert m["context"] == "The quick brown fox"
+    assert m["is_code"] is False
+
+def test_find_matches_no_match_returns_empty():
+    assert _find_matches(_fake_doc(_para(1, "hello\n")), "zzz") == []
+
+def test_find_matches_flags_code_paragraph():
+    doc = _fake_doc(_para(1, '  "key": "value"\n', font="Consolas"))
+    assert _find_matches(doc, "key")[0]["is_code"] is True
+
+def test_body_element_at_returns_containing_element():
+    doc = _fake_doc(_para(1, "first\n"), _para(7, "second\n"))
+    idx, el = _body_element_at(doc["body"]["content"], 8)
+    assert idx == 1
+    assert el["startIndex"] == 7
+
+def test_is_code_paragraph_mixed_fonts_is_false():
+    mono = {"weightedFontFamily": {"fontFamily": "Consolas"}}
+    para = {"paragraph": {"paragraphStyle": {"namedStyleType": "NORMAL_TEXT"}, "elements": [
+        {"textRun": {"content": "code ", "textStyle": mono}},
+        {"textRun": {"content": "prose\n", "textStyle": {}}},
+    ]}}
+    assert _is_code_paragraph(para) is False
+
+def test_insert_after_plan_builds_request():
+    doc = _fake_doc(_para(1, "Intro line.\n"), _para(13, "Anchor paragraph here.\n"))
+    request, body_index = _insert_after_plan(doc, "Anchor paragraph", "NEW PARAGRAPH")
+    assert body_index == 1
+    assert request["insertText"]["location"]["index"] == 35
+    assert request["insertText"]["text"] == "\nNEW PARAGRAPH"
+
+def test_insert_after_plan_missing_anchor_raises():
+    with pytest.raises(ValueError):
+        _insert_after_plan(_fake_doc(_para(1, "x\n")), "nope", "y")
+
+def test_insert_after_plan_ambiguous_raises_then_allows():
+    doc = _fake_doc(_para(1, "shared token\n"), _para(14, "shared token again\n"))
+    with pytest.raises(ValueError):
+        _insert_after_plan(doc, "shared token", "y")
+    _request, body_index = _insert_after_plan(doc, "shared token", "y", require_unique=False)
+    assert body_index == 0
+
+def test_link_plan_builds_update_request():
+    doc = _fake_doc(_para(1, "See the Lean Startup here.\n"))
+    requests, spans = _link_plan(doc, "Lean Startup", "http://example.com")
+    assert len(requests) == 1
+    style = requests[0]["updateTextStyle"]
+    assert style["range"] == {"startIndex": 9, "endIndex": 21}
+    assert style["textStyle"]["link"]["url"] == "http://example.com"
+    assert style["fields"] == "link"
+    assert spans == [{"start_index": 9, "end_index": 21}]
+
+def test_link_plan_missing_text_raises():
+    with pytest.raises(ValueError):
+        _link_plan(_fake_doc(_para(1, "hello\n")), "zzz", "http://e")
+
+def test_link_plan_ambiguous_requires_all_occurrences():
+    doc = _fake_doc(_para(1, "go go\n"))
+    with pytest.raises(ValueError):
+        _link_plan(doc, "go", "http://e")
+    requests, _spans = _link_plan(doc, "go", "http://e", all_occurrences=True)
+    assert len(requests) == 2

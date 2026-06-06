@@ -179,6 +179,145 @@ def _figure_map_from_doc(doc: dict) -> list[dict]:
     return figures
 
 
+# Font families treated as code/monospace, so safe-edit tooling can skip them.
+_MONOSPACE_FONTS = frozenset({
+    "Courier New", "Consolas", "Roboto Mono", "Source Code Pro", "Inconsolata",
+    "Fira Code", "JetBrains Mono", "Menlo", "Monaco", "Cousine", "PT Mono",
+    "Ubuntu Mono", "IBM Plex Mono", "Space Mono", "Anonymous Pro",
+})
+
+
+def _is_code_paragraph(element: dict) -> bool:
+    """True when a body element's visible text is entirely in a monospace font."""
+    paragraph = element.get("paragraph")
+    if not paragraph:
+        return False
+    families = []
+    for pe in paragraph.get("elements", []):
+        text_run = pe.get("textRun")
+        if not text_run or not text_run.get("content", "").strip():
+            continue
+        families.append(
+            text_run.get("textStyle", {}).get("weightedFontFamily", {}).get("fontFamily")
+        )
+    return bool(families) and all(f in _MONOSPACE_FONTS for f in families)
+
+
+def _doc_text_runs(element_source: dict) -> list[tuple[int, str]]:
+    """Return [(doc_start_index, text)] for every text run in the document body."""
+    runs = []
+    for el in element_source.get("body", {}).get("content", []):
+        paragraph = el.get("paragraph")
+        if not paragraph:
+            continue
+        for pe in paragraph.get("elements", []):
+            text_run = pe.get("textRun")
+            if text_run is not None:
+                runs.append((pe["startIndex"], text_run.get("content", "")))
+    return runs
+
+
+def _doc_index_at(runs: list[tuple[int, str]], flat_pos: int) -> int:
+    """Map a position in the flattened body text to a document index."""
+    pos = 0
+    for start, text in runs:
+        if pos + len(text) > flat_pos:
+            return start + (flat_pos - pos)
+        pos += len(text)
+    raise IndexError(f"flat position {flat_pos} out of range")
+
+
+def _body_element_at(content: list[dict], doc_index: int) -> tuple[int, dict | None]:
+    """Return (ordinal, element) of the body element containing a document index."""
+    for i, el in enumerate(content):
+        start, end = el.get("startIndex"), el.get("endIndex")
+        if start is None or end is None:
+            continue
+        if start <= doc_index < end:
+            return i, el
+    return -1, None
+
+
+def _find_matches(doc: dict, text: str) -> list[dict]:
+    """Locate every occurrence of `text` in the body. Returns [] when none."""
+    if not text:
+        raise ValueError("search text must not be empty")
+    content = doc.get("body", {}).get("content", [])
+    runs = _doc_text_runs(doc)
+    flat = "".join(t for _, t in runs)
+    matches = []
+    pos = flat.find(text)
+    while pos != -1:
+        start_index = _doc_index_at(runs, pos)
+        body_index, el = _body_element_at(content, start_index)
+        matches.append({
+            "flat_pos": pos,
+            "start_index": start_index,
+            "end_index": start_index + _utf16_len(text),
+            "body_index": body_index,
+            "paragraph_style": (
+                el.get("paragraph", {}).get("paragraphStyle", {}).get("namedStyleType", "")
+                if el else ""
+            ),
+            "is_code": _is_code_paragraph(el) if el else False,
+            "context": _paragraph_text(el).strip() if el else "",
+        })
+        pos = flat.find(text, pos + 1)
+    return matches
+
+
+def _insert_after_plan(
+    doc: dict, anchor: str, text: str, require_unique: bool = True
+) -> tuple[dict, int]:
+    """Build the insertText request that places `text` after the anchor's paragraph."""
+    if not anchor:
+        raise ValueError("anchor must not be empty")
+    content = doc.get("body", {}).get("content", [])
+    hits = [
+        (i, el) for i, el in enumerate(content)
+        if el.get("paragraph") and anchor in _paragraph_text(el)
+    ]
+    if not hits:
+        raise ValueError(f"anchor not found: {anchor!r}")
+    if len(hits) > 1 and require_unique:
+        raise ValueError(
+            f"anchor matches {len(hits)} paragraphs; make it unique or pass allow_multiple"
+        )
+    body_index, el = hits[0]
+    # Insert just before the paragraph's terminating newline so the new
+    # paragraph(s) inherit the anchor paragraph's style.
+    insert_index = el["endIndex"] - 1
+    request = {"insertText": {"location": {"index": insert_index}, "text": "\n" + text}}
+    return request, body_index
+
+
+def _link_plan(
+    doc: dict, text: str, url: str, all_occurrences: bool = False
+) -> tuple[list[dict], list[dict]]:
+    """Build updateTextStyle requests that hyperlink occurrences of `text`."""
+    matches = _find_matches(doc, text)
+    if not matches:
+        raise ValueError(f"text not found: {text!r}")
+    if len(matches) > 1 and not all_occurrences:
+        raise ValueError(
+            f"text matches {len(matches)} times; make it unique or pass all_occurrences"
+        )
+    targets = matches if all_occurrences else matches[:1]
+    requests = [
+        {"updateTextStyle": {
+            "range": {"startIndex": m["start_index"], "endIndex": m["end_index"]},
+            "textStyle": {"link": {"url": url}},
+            "fields": "link",
+        }}
+        for m in targets
+    ]
+    spans = [
+        {"start_index": m["start_index"], "end_index": m["end_index"]}
+        for m in targets
+    ]
+    return requests, spans
+
+
 def _is_table_separator(line: str, columns: int) -> bool:
     """Return True if line looks like a markdown table separator row."""
     try:
@@ -959,6 +1098,66 @@ def edit_document(
     return {"status": "edited", "occurrences_replaced": len(matches), "old": old, "new": new}
 
 
+def find_text(doc_id_or_url: str, text: str) -> dict:
+    """Locate `text` in a doc; report each match's indices, style, and code flag."""
+    doc_id = _extract_doc_id(doc_id_or_url)
+    doc = _docs_service().documents().get(documentId=doc_id).execute()
+    matches = _find_matches(doc, text)
+    return {"query": text, "match_count": len(matches), "matches": matches}
+
+
+def insert_after(
+    doc_id_or_url: str, anchor: str, text: str, allow_multiple: bool = False
+) -> dict:
+    """
+    Insert `text` as new paragraph(s) after the paragraph containing `anchor`.
+
+    The new paragraphs inherit the anchor paragraph's style. Use blank lines in
+    `text` to create multiple paragraphs. Raises if the anchor is missing, or
+    ambiguous unless allow_multiple is set (then the first match is used).
+    """
+    doc_id = _extract_doc_id(doc_id_or_url)
+    service = _docs_service()
+    doc = service.documents().get(documentId=doc_id).execute()
+    request, body_index = _insert_after_plan(
+        doc, anchor, text, require_unique=not allow_multiple
+    )
+    service.documents().batchUpdate(
+        documentId=doc_id, body={"requests": [request]}
+    ).execute()
+    return {
+        "status": "inserted",
+        "after_body_index": body_index,
+        "anchor": anchor,
+        "text": text,
+    }
+
+
+def link_text(
+    doc_id_or_url: str, text: str, url: str, all_occurrences: bool = False
+) -> dict:
+    """
+    Hyperlink occurrences of `text` to `url`, preserving other text styling.
+
+    By default requires exactly one match; pass all_occurrences=True to link
+    every occurrence. Raises if the text is not found.
+    """
+    doc_id = _extract_doc_id(doc_id_or_url)
+    service = _docs_service()
+    doc = service.documents().get(documentId=doc_id).execute()
+    requests, spans = _link_plan(doc, text, url, all_occurrences=all_occurrences)
+    service.documents().batchUpdate(
+        documentId=doc_id, body={"requests": requests}
+    ).execute()
+    return {
+        "status": "linked",
+        "text": text,
+        "url": url,
+        "occurrences": len(spans),
+        "spans": spans,
+    }
+
+
 def build_epub(
     doc_ids_or_urls: list[str],
     output: str | None = None,
@@ -1540,6 +1739,41 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Replace every occurrence. Default: require exactly one match.",
     )
 
+    p_find = sub.add_parser(
+        "find",
+        help="Find text in a doc; report each match's location, style, and code flag.",
+    )
+    p_find.add_argument("doc", metavar="DOC_URL")
+    p_find.add_argument("text", metavar="TEXT", help="Exact substring to locate.")
+
+    p_insert_after = sub.add_parser(
+        "insert-after",
+        help="Insert text as new paragraph(s) after the paragraph containing an anchor.",
+    )
+    p_insert_after.add_argument("doc", metavar="DOC_URL")
+    p_insert_after.add_argument(
+        "anchor", metavar="ANCHOR", help="Unique substring of the target paragraph."
+    )
+    p_insert_after.add_argument(
+        "text", metavar="TEXT", help="Text to insert; use blank lines for multiple paragraphs."
+    )
+    p_insert_after.add_argument(
+        "--allow-multiple",
+        action="store_true",
+        help="Insert after the first match even if the anchor is not unique.",
+    )
+
+    p_link = sub.add_parser("link", help="Hyperlink a span of text in a doc.")
+    p_link.add_argument("doc", metavar="DOC_URL")
+    p_link.add_argument("text", metavar="TEXT", help="Exact span to hyperlink.")
+    p_link.add_argument("url", metavar="URL")
+    p_link.add_argument(
+        "--all",
+        action="store_true",
+        dest="all_occurrences",
+        help="Link every occurrence. Default: require exactly one match.",
+    )
+
     return parser
 
 
@@ -1605,6 +1839,12 @@ def main() -> None:
         result = comment_document(args.doc, args.quoted_text, args.comment)
     elif args.command == "edit":
         result = edit_document(args.doc, args.old, args.new, all_occurrences=args.all_occurrences)
+    elif args.command == "find":
+        result = find_text(args.doc, args.text)
+    elif args.command == "insert-after":
+        result = insert_after(args.doc, args.anchor, args.text, allow_multiple=args.allow_multiple)
+    elif args.command == "link":
+        result = link_text(args.doc, args.text, args.url, all_occurrences=args.all_occurrences)
     else:
         result = append_review_note(args.doc, args.quoted_text, args.comment)
 
