@@ -69,6 +69,9 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
 
 All commands output JSON. Use `.venv/bin/pv -h` or `.venv/bin/pv <command> -h` for help.
 
+Text matching (`edit`, `find`, `link`, `style`, `insert-after`) is **quote-agnostic**: curly and
+straight quotes/apostrophes match interchangeably, so you don't have to reproduce smart quotes exactly.
+
 ## Review Workflow
 
 When asked to review a chapter:

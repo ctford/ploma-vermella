@@ -103,6 +103,20 @@ def _utf16_len(s: str) -> int:
     return sum(2 if ord(c) > 0xFFFF else 1 for c in s)
 
 
+# Curly quotes/apostrophes map to their straight equivalents. Each is a single
+# BMP character, so normalising is position-preserving — safe to use when
+# locating text without disturbing document indices.
+_QUOTE_MAP = str.maketrans({
+    "‘": "'", "’": "'", "‚": "'", "‛": "'", "′": "'",
+    "“": '"', "”": '"', "„": '"', "‟": '"', "″": '"',
+})
+
+
+def _normalize_quotes(s: str) -> str:
+    """Fold curly quotes/apostrophes to straight ones so matching is quote-agnostic."""
+    return s.translate(_QUOTE_MAP)
+
+
 def _parse_table_row(line: str) -> list[str]:
     """Parse a markdown-style pipe table row into stripped cell values."""
     text = line.strip()
@@ -247,8 +261,11 @@ def _find_matches(doc: dict, text: str) -> list[dict]:
     content = doc.get("body", {}).get("content", [])
     runs = _doc_text_runs(doc)
     flat = "".join(t for _, t in runs)
+    # Match on quote-normalized text; normalization is position-preserving.
+    nflat = _normalize_quotes(flat)
+    ntext = _normalize_quotes(text)
     matches = []
-    pos = flat.find(text)
+    pos = nflat.find(ntext)
     while pos != -1:
         start_index = _doc_index_at(runs, pos)
         body_index, el = _body_element_at(content, start_index)
@@ -264,7 +281,7 @@ def _find_matches(doc: dict, text: str) -> list[dict]:
             "is_code": _is_code_paragraph(el) if el else False,
             "context": _paragraph_text(el).strip() if el else "",
         })
-        pos = flat.find(text, pos + 1)
+        pos = nflat.find(ntext, pos + 1)
     return matches
 
 
@@ -275,9 +292,10 @@ def _insert_after_plan(
     if not anchor:
         raise ValueError("anchor must not be empty")
     content = doc.get("body", {}).get("content", [])
+    nanchor = _normalize_quotes(anchor)
     hits = [
         (i, el) for i, el in enumerate(content)
-        if el.get("paragraph") and anchor in _paragraph_text(el)
+        if el.get("paragraph") and nanchor in _normalize_quotes(_paragraph_text(el))
     ]
     if not hits:
         raise ValueError(f"anchor not found: {anchor!r}")
@@ -1304,6 +1322,9 @@ def edit_document(
                 runs.append((pe["startIndex"], tr.get("content", "")))
 
     flat = "".join(t for _, t in runs)
+    # Match quote-agnostically; normalization preserves positions and lengths.
+    nflat = _normalize_quotes(flat)
+    nold = _normalize_quotes(old)
 
     def doc_index_at(flat_pos: int) -> int:
         pos = 0
@@ -1316,11 +1337,11 @@ def edit_document(
     matches = []
     search_from = 0
     while True:
-        idx = flat.find(old, search_from)
+        idx = nflat.find(nold, search_from)
         if idx == -1:
             break
         matches.append(idx)
-        search_from = idx + len(old)
+        search_from = idx + len(nold)
 
     if not matches:
         raise ValueError(f"no match for {old!r}")

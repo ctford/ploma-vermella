@@ -36,6 +36,7 @@ from pv import (
     _link_plan,
     _map_comments,
     _media_extension,
+    _normalize_quotes,
     _paragraph_location,
     _paragraph_text,
     _parse_append_blocks,
@@ -767,3 +768,17 @@ def test_style_plan_requires_a_style():
 def test_style_plan_missing_text_raises():
     with pytest.raises(ValueError):
         _style_plan(_fake_doc(_para(1, "hello\n")), "zzz", italic=True)
+
+
+def test_normalize_quotes_folds_curly_to_straight():
+    assert _normalize_quotes("don’t say “hi”") == 'don\'t say "hi"'
+
+def test_find_matches_is_quote_agnostic():
+    # curly in the doc, straight in the query
+    doc = _fake_doc(_para(1, "It’s a “test”\n"))
+    m = _find_matches(doc, 'It\'s a "test"')
+    assert len(m) == 1
+    assert m[0]["start_index"] == 1
+    # straight in the doc, curly in the query
+    doc2 = _fake_doc(_para(1, "a 'b'\n"))
+    assert len(_find_matches(doc2, "a ‘b’")) == 1
