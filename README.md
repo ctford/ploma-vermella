@@ -36,11 +36,11 @@ If you add APIs or OAuth scopes later, move `credentials/token.json` aside and r
 
 ## Usage
 
-Tell Claude Code in plain English:
+Tell Claude Code (or any AGENTS.md-aware agent) in plain English:
 
 > "Review chapter 3 at `<doc-url>`."
 
-Claude will read all files in `context/` and `references/`, fetch the document, and append a **🪶 Ploma Vermella Review** section at the end of the doc with dated, bulleted, located feedback.
+The agent identifies which **work** the chapter belongs to, reads that work's context (its `context/<work>/README.md` indexes the rest) plus anything in `references/`, fetches the document, and appends a **🪶 Ploma Vermella Review** section with dated, bulleted, located feedback. Agent instructions live in [AGENTS.md](AGENTS.md).
 
 The `pv` CLI is available for direct use (with the virtualenv active):
 
@@ -56,7 +56,12 @@ pv sheet-update <sheet-url> <range> ...     # write sheet rows from JSON
 pv figure-map <doc-url>                     # inspect image neighborhoods in a doc
 pv replace-block <doc-url> <start> <end> ... # replace one body-element block safely
 pv insert-image <doc-url> <body-index> ...  # restore an inline image at a body index
-pv build-epub <doc-url> <doc-url> ...       # build an EPUB from multiple docs into dist/ with a date suffix
+pv find <doc-url> <text>                    # locate text: indices, paragraph style, is_code, context
+pv insert-after <doc-url> <anchor> <text>   # insert paragraph(s) after an anchor paragraph
+pv link <doc-url> <text> <url>              # hyperlink a span of text
+pv build-epub <doc-url> <doc-url> ...       # build an EPUB (figures preserved) into dist/ with a date suffix
+#
+# Run `pv -h` or `pv <command> -h` for the full command list.
 ```
 
 ## Figure Workflow
@@ -78,7 +83,9 @@ This is intentionally slower than a bulk edit, but it avoids index drift in Goog
 
 ## Context
 
-Drop working review material into `context/` and longer-lived local reference material into `references/` — style guide, chapter outline, author notes. Claude reads both directories on each review. No code changes needed.
+Context lives under `context/`, one subdirectory per **work** (a book or other long-running effort). Each work is its own git repo and is self-contained: a `README.md` indexes the directory, a `style_guide.md` holds that work's prose rules, and other files (`outline.md`, `documents.md`, `figures.md`, `notes.md`, …) are described in the README. Longer-lived local reference material (e.g. publisher style guides) goes in `references/`.
+
+The agent loads a work's `README.md` first and follows it to whatever else the task needs — see [AGENTS.md](AGENTS.md) for the full workflow. No code changes needed to add a work.
 
 ---
 
