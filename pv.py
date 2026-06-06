@@ -1103,16 +1103,23 @@ def insert_image_at_body_index(
     }
 
 
-def fetch_document(doc_id_or_url: str, include_resolved: bool = False) -> dict:
-    """
-    Return {title, text, comments} for the given Google Doc.
+def _map_comments(raw_comments: list[dict], include_resolved: bool) -> list[dict]:
+    """Flatten raw Drive comments to {id, author, content, quoted_text, resolved}."""
+    return [
+        {
+            "id": c.get("id", ""),
+            "author": c.get("author", {}).get("displayName", ""),
+            "content": c.get("content", ""),
+            "quoted_text": c.get("quotedFileContent", {}).get("value", ""),
+            "resolved": c.get("resolved", False),
+        }
+        for c in raw_comments
+        if include_resolved or not c.get("resolved", False)
+    ]
 
-    By default, resolved comments are filtered out. Pass include_resolved=True
-    to include them; each comment carries a `resolved` boolean either way.
-    """
-    doc_id = _extract_doc_id(doc_id_or_url)
-    doc = _docs_service().documents().get(documentId=doc_id).execute()
 
+def _fetch_comments(doc_id: str, include_resolved: bool = False) -> list[dict]:
+    """Page through and return a doc's comments as flat dicts."""
     service = _drive_service()
     raw_comments: list[dict] = []
     page_token = None
@@ -1133,22 +1140,29 @@ def fetch_document(doc_id_or_url: str, include_resolved: bool = False) -> dict:
         page_token = result.get("nextPageToken")
         if not page_token:
             break
+    return _map_comments(raw_comments, include_resolved)
 
-    comments = [
-        {
-            "id": c.get("id", ""),
-            "author": c.get("author", {}).get("displayName", ""),
-            "content": c.get("content", ""),
-            "quoted_text": c.get("quotedFileContent", {}).get("value", ""),
-            "resolved": c.get("resolved", False),
-        }
-        for c in raw_comments
-        if include_resolved or not c.get("resolved", False)
-    ]
+
+def list_comments(doc_id_or_url: str, include_resolved: bool = False) -> dict:
+    """Return a doc's comments (id, author, content, quoted_text, resolved)."""
+    doc_id = _extract_doc_id(doc_id_or_url)
+    comments = _fetch_comments(doc_id, include_resolved)
+    return {"count": len(comments), "comments": comments}
+
+
+def fetch_document(doc_id_or_url: str, include_resolved: bool = False) -> dict:
+    """
+    Return {title, text, comments} for the given Google Doc.
+
+    By default, resolved comments are filtered out. Pass include_resolved=True
+    to include them; each comment carries a `resolved` boolean either way.
+    """
+    doc_id = _extract_doc_id(doc_id_or_url)
+    doc = _docs_service().documents().get(documentId=doc_id).execute()
     return {
         "title": doc.get("title", ""),
         "text": _extract_text(doc),
-        "comments": comments,
+        "comments": _fetch_comments(doc_id, include_resolved),
     }
 
 
@@ -1979,10 +1993,21 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Name for the copy. Defaults to the source document's name.",
     )
 
+    p_comments = sub.add_parser(
+        "comments",
+        help="List a doc's comments (id, author, content, quoted text, resolved).",
+    )
+    p_comments.add_argument("doc", metavar="DOC_URL")
+    p_comments.add_argument(
+        "--include-resolved",
+        action="store_true",
+        help="Include resolved comments. Default: unresolved only.",
+    )
+
     p_resolve = sub.add_parser("resolve", help="Resolve a comment on a Google Doc.")
     p_resolve.add_argument("doc", metavar="DOC_URL")
     p_resolve.add_argument("comment_id", metavar="COMMENT_ID",
-                           help="Comment ID (use `pv fetch` to list ids).")
+                           help="Comment ID (use `pv comments` to list ids).")
 
     p_resolve_all = sub.add_parser("resolve-all", help="Resolve every unresolved comment on a doc.")
     p_resolve_all.add_argument("doc", metavar="DOC_URL")
@@ -2106,6 +2131,8 @@ def main() -> None:
         result = move_document(args.doc, args.folder)
     elif args.command == "cp":
         result = copy_document(args.doc, args.folder, name=args.name)
+    elif args.command == "comments":
+        result = list_comments(args.doc, include_resolved=args.include_resolved)
     elif args.command == "resolve":
         result = resolve_comment(args.doc, args.comment_id)
     elif args.command == "resolve-all":

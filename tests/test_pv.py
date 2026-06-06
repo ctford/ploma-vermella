@@ -34,6 +34,7 @@ from pv import (
     _is_image_paragraph,
     _is_table_separator,
     _link_plan,
+    _map_comments,
     _media_extension,
     _paragraph_location,
     _paragraph_text,
@@ -720,3 +721,19 @@ def test_epub_package_front_matter_leads_spine():
         front_matter=[{"id": "titlepage", "href": "title.xhtml"}],
     )
     assert package.index('idref="titlepage"') < package.index('idref="chap1"')
+
+
+def test_map_comments_flattens_and_filters_resolved():
+    raw = [
+        {"id": "a", "author": {"displayName": "X"}, "content": "c1",
+         "quotedFileContent": {"value": "q1"}, "resolved": False},
+        {"id": "b", "content": "c2", "resolved": True},
+    ]
+    assert _map_comments(raw, include_resolved=False) == [
+        {"id": "a", "author": "X", "content": "c1", "quoted_text": "q1", "resolved": False},
+    ]
+    both = _map_comments(raw, include_resolved=True)
+    assert len(both) == 2
+    assert both[1] == {
+        "id": "b", "author": "", "content": "c2", "quoted_text": "", "resolved": True,
+    }

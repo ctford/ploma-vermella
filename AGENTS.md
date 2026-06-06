@@ -59,6 +59,7 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
 .venv/bin/pv insert-after <doc-url> <anchor> <text>    # insert paragraph(s) after an anchor paragraph
 .venv/bin/pv link <doc-url> <text> <url> [--all]       # hyperlink a span of text
 .venv/bin/pv comment <doc-url> <quoted-text> <text>    # anchored sidebar comment
+.venv/bin/pv comments <doc-url> [--include-resolved]   # list comments: id, content, quoted text, resolved
 .venv/bin/pv resolve <doc-url> <comment-id>            # resolve a comment
 .venv/bin/pv resolve-all <doc-url>                     # resolve every unresolved comment
 .venv/bin/pv build-epub <doc-url> ... [-o OUT] [--title T] [--subtitle S] [--author A] [--cover IMG]
