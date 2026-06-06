@@ -61,7 +61,8 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
 .venv/bin/pv comment <doc-url> <quoted-text> <text>    # anchored sidebar comment
 .venv/bin/pv resolve <doc-url> <comment-id>            # resolve a comment
 .venv/bin/pv resolve-all <doc-url>                     # resolve every unresolved comment
-.venv/bin/pv build-epub <doc-url> ... [-o OUT] [--title T]  # build an EPUB from one or more docs
+.venv/bin/pv build-epub <doc-url> ... [-o OUT] [--title T] [--subtitle S] [--author A] [--cover IMG]
+                                                       # build an EPUB; book metadata comes from context, not hardcoded
 ```
 
 All commands output JSON. Use `.venv/bin/pv -h` or `.venv/bin/pv <command> -h` for help.

@@ -11,6 +11,7 @@ from pv import (
     _body_element_at,
     _build_parser,
     _chapter_filename,
+    _cover_page_xhtml,
     _default_epub_output_path,
     _default_epub_title,
     _doc_index_at,
@@ -42,6 +43,7 @@ from pv import (
     _shape_text,
     _slugify,
     _text_from_elements,
+    _title_page_xhtml,
     _utf16_len,
     main,
 )
@@ -673,3 +675,48 @@ def test_every_subcommand_is_dispatched():
     # "note" is intentionally the else/default branch in main().
     missing = [n for n in names if f'"{n}"' not in src and n != "note"]
     assert not missing, f"subcommands not dispatched in main(): {missing}"
+
+
+# ---------------------------------------------------------------------------
+# EPUB cover / title page / author metadata
+# ---------------------------------------------------------------------------
+
+def test_title_page_xhtml_includes_title_subtitle_author():
+    xhtml = _title_page_xhtml("My Book", "A Subtitle", "Chris Ford")
+    assert '<h1 class="title">My Book</h1>' in xhtml
+    assert '<p class="subtitle">A Subtitle</p>' in xhtml
+    assert '<p class="author">Chris Ford</p>' in xhtml
+
+def test_title_page_xhtml_omits_missing_fields():
+    xhtml = _title_page_xhtml("Only Title")
+    assert '<h1 class="title">Only Title</h1>' in xhtml
+    assert "subtitle" not in xhtml
+    assert "author" not in xhtml
+
+def test_cover_page_xhtml_references_image():
+    xhtml = _cover_page_xhtml("images/cover.jpg")
+    assert '<img class="cover" src="images/cover.jpg" alt="Cover"/>' in xhtml
+    assert 'epub:type="cover"' in xhtml
+
+def test_epub_package_includes_author_creator():
+    package = _epub_package(
+        "Book", "uuid-1", [{"filename": "chapter-01.xhtml", "title": "Ch1"}],
+        author="Chris Ford",
+    )
+    assert "<dc:creator>Chris Ford</dc:creator>" in package
+
+def test_epub_package_marks_cover_image_and_meta():
+    package = _epub_package(
+        "Book", "uuid-1", [{"filename": "chapter-01.xhtml", "title": "Ch1"}],
+        media_items=[{"id": "cover-image", "href": "images/cover.jpg", "media_type": "image/jpeg"}],
+        cover_image_id="cover-image",
+    )
+    assert 'properties="cover-image"' in package
+    assert '<meta name="cover" content="cover-image"/>' in package
+
+def test_epub_package_front_matter_leads_spine():
+    package = _epub_package(
+        "Book", "uuid-1", [{"filename": "chapter-01.xhtml", "title": "Ch1"}],
+        front_matter=[{"id": "titlepage", "href": "title.xhtml"}],
+    )
+    assert package.index('idref="titlepage"') < package.index('idref="chap1"')

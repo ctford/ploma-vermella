@@ -3,7 +3,9 @@
 import argparse
 import html
 import json
+import mimetypes
 import re
+import urllib.request
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -648,6 +650,57 @@ def _blocks_to_xhtml(title: str, blocks: list[dict], image_paths: dict | None = 
     )
 
 
+def _title_page_xhtml(title: str, subtitle: str | None = None, author: str | None = None) -> str:
+    """Render a simple title page as an XHTML document."""
+    parts = [f'<h1 class="title">{html.escape(title)}</h1>']
+    if subtitle:
+        parts.append(f'<p class="subtitle">{html.escape(subtitle)}</p>')
+    if author:
+        parts.append(f'<p class="author">{html.escape(author)}</p>')
+    body = "\n    ".join(parts)
+    return (
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+        "<html xmlns=\"http://www.w3.org/1999/xhtml\" "
+        f"xmlns:epub=\"{_EPUB_NS}\">\n"
+        "<head>\n"
+        f"  <title>{html.escape(title)}</title>\n"
+        "  <link rel=\"stylesheet\" type=\"text/css\" href=\"styles.css\"/>\n"
+        "</head>\n"
+        "<body>\n"
+        f"  <section epub:type=\"titlepage\" class=\"titlepage\">\n    {body}\n  </section>\n"
+        "</body>\n"
+        "</html>\n"
+    )
+
+
+def _cover_page_xhtml(image_href: str) -> str:
+    """Render a full-page cover image as an XHTML document."""
+    src = html.escape(image_href, quote=True)
+    return (
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+        "<html xmlns=\"http://www.w3.org/1999/xhtml\" "
+        f"xmlns:epub=\"{_EPUB_NS}\">\n"
+        "<head>\n"
+        "  <title>Cover</title>\n"
+        "  <link rel=\"stylesheet\" type=\"text/css\" href=\"styles.css\"/>\n"
+        "</head>\n"
+        "<body>\n"
+        f"  <section epub:type=\"cover\">\n    <img class=\"cover\" src=\"{src}\" alt=\"Cover\"/>\n"
+        "  </section>\n"
+        "</body>\n"
+        "</html>\n"
+    )
+
+
+def _read_cover_image(cover: str) -> tuple[bytes, str]:
+    """Return (bytes, media_type) for a cover image given a local path or URL."""
+    if cover.startswith(("http://", "https://")):
+        with urllib.request.urlopen(cover) as resp:
+            return resp.read(), (resp.headers.get_content_type() or "image/jpeg")
+    path = Path(cover)
+    return path.read_bytes(), (mimetypes.guess_type(path.name)[0] or "image/jpeg")
+
+
 def _epub_nav(book_title: str, chapters: list[dict]) -> str:
     """Return the EPUB navigation document."""
     items = "\n      ".join(
@@ -679,18 +732,33 @@ def _epub_package(
     book_id: str,
     chapters: list[dict],
     media_items: list[dict] | None = None,
+    author: str | None = None,
+    front_matter: list[dict] | None = None,
+    cover_image_id: str | None = None,
 ) -> str:
-    """Return the OPF package document."""
+    """Return the OPF package document.
+
+    front_matter is a list of {id, href} XHTML docs (cover/title pages) placed
+    ahead of the chapters in the spine. cover_image_id names the media item to
+    flag as the EPUB cover image.
+    """
     manifest_items = [
         '<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>',
         '<item id="css" href="styles.css" media-type="text/css"/>',
     ]
     for media in media_items or []:
+        props = ' properties="cover-image"' if media["id"] == cover_image_id else ""
         manifest_items.append(
             f'<item id="{media["id"]}" href="{media["href"]}" '
-            f'media-type="{media["media_type"]}"/>'
+            f'media-type="{media["media_type"]}"{props}/>'
         )
+
     spine_items = []
+    for page in front_matter or []:
+        manifest_items.append(
+            f'<item id="{page["id"]}" href="{page["href"]}" media-type="application/xhtml+xml"/>'
+        )
+        spine_items.append(f'<itemref idref="{page["id"]}"/>')
     for i, chapter in enumerate(chapters, start=1):
         manifest_items.append(
             f'<item id="chap{i}" href="{chapter["filename"]}" media-type="application/xhtml+xml"/>'
@@ -700,16 +768,25 @@ def _epub_package(
     manifest = "\n    ".join(manifest_items)
     spine = "\n    ".join(spine_items)
     modified = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    safe_title = html.escape(book_title)
+
+    meta = [
+        f'<dc:identifier id="bookid">urn:uuid:{book_id}</dc:identifier>',
+        f"<dc:title>{html.escape(book_title)}</dc:title>",
+    ]
+    if author:
+        meta.append(f"<dc:creator>{html.escape(author)}</dc:creator>")
+    meta.append("<dc:language>en</dc:language>")
+    meta.append(f'<meta property="dcterms:modified">{modified}</meta>')
+    if cover_image_id:
+        meta.append(f'<meta name="cover" content="{cover_image_id}"/>')
+    metadata = "\n    ".join(meta)
+
     return (
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
         "<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" "
         f'unique-identifier="bookid" xml:lang="en">\n'
         "  <metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n"
-        f"    <dc:identifier id=\"bookid\">urn:uuid:{book_id}</dc:identifier>\n"
-        f"    <dc:title>{safe_title}</dc:title>\n"
-        "    <dc:language>en</dc:language>\n"
-        f"    <meta property=\"dcterms:modified\">{modified}</meta>\n"
+        f"    {metadata}\n"
         "  </metadata>\n"
         "  <manifest>\n"
         f"    {manifest}\n"
@@ -1261,8 +1338,15 @@ def build_epub(
     doc_ids_or_urls: list[str],
     output: str | None = None,
     title: str | None = None,
+    subtitle: str | None = None,
+    author: str | None = None,
+    cover: str | None = None,
 ) -> dict:
-    """Build an EPUB from multiple Google Docs, excluding PV review sections."""
+    """Build an EPUB from multiple Google Docs, excluding PV review sections.
+
+    title/subtitle/author are book metadata (book-specific — supply from the
+    work's context, not hardcoded). cover is a local path or URL to a cover image.
+    """
     docs_service = _docs_service()
     chapters = []
     media_items = []  # OPF manifest entries for images
@@ -1313,8 +1397,27 @@ def build_epub(
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     book_id = str(uuid.uuid4())
+
+    # Front matter: an optional cover-image page, then a generated title page.
+    front_matter = []  # [{id, href}] in spine order
+    front_files = []   # [(href, xhtml)]
+    cover_image_id = None
+    if cover:
+        cover_bytes, cover_type = _read_cover_image(cover)
+        cover_href = f"images/cover.{_media_extension(cover_type)}"
+        cover_image_id = "cover-image"
+        media_items.insert(0, {"id": cover_image_id, "href": cover_href, "media_type": cover_type})
+        media_files.append((cover_href, cover_bytes))
+        front_matter.append({"id": "cover-page", "href": "cover.xhtml"})
+        front_files.append(("cover.xhtml", _cover_page_xhtml(cover_href)))
+    front_matter.append({"id": "titlepage", "href": "title.xhtml"})
+    front_files.append(("title.xhtml", _title_page_xhtml(book_title, subtitle, author)))
+
     nav = _epub_nav(book_title, chapters)
-    package = _epub_package(book_title, book_id, chapters, media_items)
+    package = _epub_package(
+        book_title, book_id, chapters, media_items,
+        author=author, front_matter=front_matter, cover_image_id=cover_image_id,
+    )
     stylesheet = (
         "body { font-family: serif; line-height: 1.4; }\n"
         "h1, h2, h3, h4 { font-family: sans-serif; }\n"
@@ -1322,6 +1425,12 @@ def build_epub(
         "p, li { margin: 0.6em 0; }\n"
         "figure { margin: 1em 0; text-align: center; }\n"
         "img { max-width: 100%; height: auto; }\n"
+        ".titlepage { text-align: center; margin-top: 20%; }\n"
+        "h1.title { font-size: 2.2em; }\n"
+        "p.subtitle { font-size: 1.2em; font-style: italic; }\n"
+        "p.author { margin-top: 2em; font-size: 1.1em; }\n"
+        "section[epub|type=\"cover\"] { max-width: none; }\n"
+        "img.cover { width: 100%; height: 100%; object-fit: contain; }\n"
     )
 
     with zipfile.ZipFile(output_path, "w") as epub:
@@ -1340,6 +1449,8 @@ def build_epub(
         epub.writestr("OEBPS/content.opf", package)
         epub.writestr("OEBPS/nav.xhtml", nav)
         epub.writestr("OEBPS/styles.css", stylesheet)
+        for href, xhtml in front_files:
+            epub.writestr(f"OEBPS/{href}", xhtml)
         for chapter in chapters:
             epub.writestr(f"OEBPS/{chapter['filename']}", chapter["xhtml"])
         for href, data in media_files:
@@ -1348,8 +1459,11 @@ def build_epub(
     return {
         "status": "built",
         "title": book_title,
+        "subtitle": subtitle,
+        "author": author,
+        "has_cover": bool(cover),
         "output": str(output_path),
-        "images_embedded": len(media_files),
+        "images_embedded": len(media_files) - (1 if cover else 0),
         "images_skipped": skipped_images,
         "chapters": [
             {
@@ -1823,6 +1937,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "--title",
         help="Book title for the EPUB metadata and default filename.",
     )
+    p_epub.add_argument(
+        "--subtitle",
+        help="Book subtitle, shown on the generated title page.",
+    )
+    p_epub.add_argument(
+        "--author",
+        help="Author, written to dc:creator and the title page.",
+    )
+    p_epub.add_argument(
+        "--cover",
+        help="Cover image (local path or URL) embedded as the EPUB cover.",
+    )
 
     p_review_copy = sub.add_parser(
         "review-copy",
@@ -1961,7 +2087,14 @@ def main() -> None:
     elif args.command == "append":
         result = append_content(args.doc, args.heading, args.text)
     elif args.command == "build-epub":
-        result = build_epub(args.docs, output=args.output, title=args.title)
+        result = build_epub(
+            args.docs,
+            output=args.output,
+            title=args.title,
+            subtitle=args.subtitle,
+            author=args.author,
+            cover=args.cover,
+        )
     elif args.command == "review-copy":
         result = make_review_copy(
             args.doc,
