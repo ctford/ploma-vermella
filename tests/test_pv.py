@@ -8,6 +8,7 @@ from pv import (
     _blocks_to_xhtml,
     _body_element_at,
     _default_epub_output_path,
+    _epub_package,
     _extract_blocks,
     _extract_doc_id,
     _extract_folder_id,
@@ -16,10 +17,13 @@ from pv import (
     _extract_text,
     _figure_map_from_doc,
     _find_matches,
+    _image_content_uri,
+    _inline_html,
     _insert_after_plan,
     _is_code_paragraph,
     _is_image_paragraph,
     _link_plan,
+    _media_extension,
     _paragraph_location,
     _paragraph_text,
     _parse_append_blocks,
@@ -272,11 +276,79 @@ BLOCK_DOC = {
 
 def test_extract_blocks_preserves_structure_and_stops_at_review():
     assert _extract_blocks(BLOCK_DOC) == [
-        {"type": "heading", "level": 1, "text": "Chapter Title"},
-        {"type": "heading", "level": 2, "text": "Section"},
-        {"type": "paragraph", "text": "Body paragraph."},
-        {"type": "list_item", "text": "Bullet item"},
+        {"type": "heading", "level": 1, "text": "Chapter Title", "html": "Chapter Title"},
+        {"type": "heading", "level": 2, "text": "Section", "html": "Section"},
+        {"type": "paragraph", "text": "Body paragraph.", "html": "Body paragraph."},
+        {"type": "list_item", "text": "Bullet item", "html": "Bullet item"},
     ]
+
+
+def test_extract_blocks_emits_image_block():
+    doc = {"body": {"content": [
+        {"paragraph": {"paragraphStyle": {"namedStyleType": "NORMAL_TEXT"}, "elements": [
+            {"inlineObjectElement": {"inlineObjectId": "kix.img1"}},
+        ]}},
+        {"paragraph": {"paragraphStyle": {"namedStyleType": "NORMAL_TEXT"}, "elements": [
+            {"textRun": {"content": "Figure 1-1. A caption.\n"}},
+        ]}},
+    ]}}
+    assert _extract_blocks(doc) == [
+        {"type": "image", "object_id": "kix.img1"},
+        {"type": "paragraph", "text": "Figure 1-1. A caption.", "html": "Figure 1-1. A caption."},
+    ]
+
+
+def test_inline_html_renders_italic_bold_and_link():
+    elements = [
+        {"textRun": {"content": "see ", "textStyle": {}}},
+        {"textRun": {"content": "Lean Startup", "textStyle": {
+            "italic": True, "link": {"url": "http://example.com/?a=1&b=2"}}}},
+        {"textRun": {"content": " now\n", "textStyle": {"bold": True}}},
+    ]
+    out = _inline_html(elements)
+    assert out == (
+        'see <a href="http://example.com/?a=1&amp;b=2"><em>Lean Startup</em></a>'
+        "<strong> now</strong>"
+    )
+
+
+def test_image_content_uri_resolves_from_inline_objects():
+    doc = {"inlineObjects": {"kix.img1": {"inlineObjectProperties": {"embeddedObject": {
+        "imageProperties": {"contentUri": "https://example.com/image.png"}}}}}}
+    assert _image_content_uri(doc, "kix.img1") == "https://example.com/image.png"
+    assert _image_content_uri(doc, "missing") is None
+
+
+def test_media_extension_maps_types():
+    assert _media_extension("image/png") == "png"
+    assert _media_extension("image/jpeg; charset=binary") == "jpg"
+    assert _media_extension("image/unknown") == "img"
+
+
+def test_blocks_to_xhtml_renders_image_and_inline_html():
+    xhtml = _blocks_to_xhtml(
+        "Example",
+        [
+            {"type": "paragraph", "html": "see <em>Lean Startup</em>"},
+            {"type": "image", "object_id": "kix.img1"},
+            {"type": "image", "object_id": "kix.missing"},
+        ],
+        image_paths={"kix.img1": "images/ch01-img01.png"},
+    )
+    assert "<p>see <em>Lean Startup</em></p>" in xhtml
+    assert '<figure><img src="images/ch01-img01.png" alt=""/></figure>' in xhtml
+    # An image with no downloaded path is skipped, not rendered broken.
+    assert "kix.missing" not in xhtml
+
+
+def test_epub_package_includes_image_manifest_items():
+    package = _epub_package(
+        "Book", "uuid-1",
+        [{"filename": "chapter-01.xhtml", "title": "Ch1"}],
+        media_items=[{"id": "img-01-01", "href": "images/ch01-img01.png",
+                      "media_type": "image/png"}],
+    )
+    assert '<item id="img-01-01" href="images/ch01-img01.png" media-type="image/png"/>' in package
 
 
 def test_slugify_builds_safe_filename():

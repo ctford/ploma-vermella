@@ -6,10 +6,10 @@ import json
 import re
 import uuid
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
-from google.auth.transport.requests import Request
+from google.auth.transport.requests import AuthorizedSession, Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
@@ -464,14 +464,48 @@ def _text_from_elements(elements: list[dict]) -> str:
     ).rstrip("\n")
 
 
+def _inline_html(elements: list[dict]) -> str:
+    """Render paragraph text runs as inline HTML, preserving italic/bold/links."""
+    parts = []
+    for pe in elements:
+        text_run = pe.get("textRun")
+        if text_run is None:
+            continue
+        content = text_run.get("content", "").replace("\n", "")
+        if content == "":
+            continue
+        fragment = html.escape(content)
+        style = text_run.get("textStyle", {})
+        if style.get("italic"):
+            fragment = f"<em>{fragment}</em>"
+        if style.get("bold"):
+            fragment = f"<strong>{fragment}</strong>"
+        link_url = style.get("link", {}).get("url")
+        if link_url:
+            fragment = f'<a href="{html.escape(link_url, quote=True)}">{fragment}</a>'
+        parts.append(fragment)
+    return "".join(parts).strip()
+
+
+def _inline_object_ids(element: dict) -> list[str]:
+    """Return the inline object IDs (images) referenced by a body element."""
+    ids = []
+    for pe in element.get("paragraph", {}).get("elements", []):
+        ioe = pe.get("inlineObjectElement")
+        if ioe and ioe.get("inlineObjectId"):
+            ids.append(ioe["inlineObjectId"])
+    return ids
+
+
 def _extract_blocks(doc: dict) -> list[dict]:
     """
     Extract document blocks suitable for EPUB rendering.
 
     Returns a list of dictionaries with type keys:
-    - {"type": "heading", "level": 1..4, "text": "..."}
-    - {"type": "paragraph", "text": "..."}
-    - {"type": "list_item", "text": "..."}
+    - {"type": "heading", "level": 1..4, "text": "...", "html": "..."}
+    - {"type": "paragraph", "text": "...", "html": "..."}
+    - {"type": "list_item", "text": "...", "html": "..."}
+    - {"type": "image", "object_id": "..."}
     """
     blocks = []
     for element in doc.get("body", {}).get("content", []):
@@ -480,26 +514,33 @@ def _extract_blocks(doc: dict) -> list[dict]:
             continue
 
         text = _text_from_elements(paragraph.get("elements", []))
-        if not text:
-            continue
         if text == _REVIEW_HEADING:
             break
 
+        # Image-only paragraphs carry no text; emit them before the empty check
+        # so figures are preserved rather than dropped.
+        for object_id in _inline_object_ids(element):
+            blocks.append({"type": "image", "object_id": object_id})
+
+        if not text:
+            continue
+
+        inline = _inline_html(paragraph.get("elements", []))
         style = paragraph.get("paragraphStyle", {}).get("namedStyleType", "")
         if "bullet" in paragraph:
-            blocks.append({"type": "list_item", "text": text})
+            blocks.append({"type": "list_item", "text": text, "html": inline})
             continue
 
         if style == "TITLE":
-            blocks.append({"type": "heading", "level": 1, "text": text})
+            blocks.append({"type": "heading", "level": 1, "text": text, "html": inline})
         elif style == "HEADING_1":
-            blocks.append({"type": "heading", "level": 2, "text": text})
+            blocks.append({"type": "heading", "level": 2, "text": text, "html": inline})
         elif style == "HEADING_2":
-            blocks.append({"type": "heading", "level": 3, "text": text})
+            blocks.append({"type": "heading", "level": 3, "text": text, "html": inline})
         elif style in {"HEADING_3", "HEADING_4"}:
-            blocks.append({"type": "heading", "level": 4, "text": text})
+            blocks.append({"type": "heading", "level": 4, "text": text, "html": inline})
         else:
-            blocks.append({"type": "paragraph", "text": text})
+            blocks.append({"type": "paragraph", "text": text, "html": inline})
 
     return blocks
 
@@ -515,29 +556,77 @@ def _chapter_filename(index: int) -> str:
     return f"chapter-{index:02d}.xhtml"
 
 
-def _blocks_to_xhtml(title: str, blocks: list[dict]) -> str:
-    """Render extracted blocks as a simple XHTML chapter."""
+_MEDIA_EXTENSIONS = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/gif": "gif",
+    "image/webp": "webp",
+    "image/svg+xml": "svg",
+}
+
+
+def _media_extension(media_type: str) -> str:
+    """Map an image media type to a file extension."""
+    key = (media_type or "").split(";")[0].strip().lower()
+    return _MEDIA_EXTENSIONS.get(key, "img")
+
+
+def _image_content_uri(doc: dict, object_id: str) -> str | None:
+    """Return the (short-lived) content URI for an inline image object, if any."""
+    obj = doc.get("inlineObjects", {}).get(object_id, {})
+    embedded = obj.get("inlineObjectProperties", {}).get("embeddedObject", {})
+    return embedded.get("imageProperties", {}).get("contentUri")
+
+
+def _download_image(content_uri: str) -> tuple[bytes, str]:
+    """Download an inline image, returning (bytes, media_type)."""
+    session = AuthorizedSession(_get_credentials())
+    resp = session.get(content_uri)
+    resp.raise_for_status()
+    media_type = (resp.headers.get("Content-Type") or "image/png").split(";")[0].strip()
+    return resp.content, media_type
+
+
+def _block_html(block: dict) -> str:
+    """Inner HTML for a text block: prefer rich inline html, else escape text."""
+    inline = block.get("html")
+    return inline if inline is not None else html.escape(block.get("text", ""))
+
+
+def _blocks_to_xhtml(title: str, blocks: list[dict], image_paths: dict | None = None) -> str:
+    """Render extracted blocks as a simple XHTML chapter.
+
+    image_paths maps an inline object_id to its EPUB-relative href; image blocks
+    whose object_id is absent from the map are skipped.
+    """
+    image_paths = image_paths or {}
     parts = []
     in_list = False
     for block in blocks:
         block_type = block["type"]
-        text = html.escape(block["text"])
+
         if block_type == "list_item":
             if not in_list:
                 parts.append("<ul>")
                 in_list = True
-            parts.append(f"<li>{text}</li>")
+            parts.append(f"<li>{_block_html(block)}</li>")
             continue
 
         if in_list:
             parts.append("</ul>")
             in_list = False
 
-        if block_type == "heading":
+        if block_type == "image":
+            href = image_paths.get(block.get("object_id"))
+            if href:
+                src = html.escape(href, quote=True)
+                parts.append(f'<figure><img src="{src}" alt=""/></figure>')
+        elif block_type == "heading":
             level = max(1, min(6, int(block["level"])))
-            parts.append(f"<h{level}>{text}</h{level}>")
+            parts.append(f"<h{level}>{_block_html(block)}</h{level}>")
         else:
-            parts.append(f"<p>{text}</p>")
+            parts.append(f"<p>{_block_html(block)}</p>")
 
     if in_list:
         parts.append("</ul>")
@@ -585,12 +674,22 @@ def _epub_nav(book_title: str, chapters: list[dict]) -> str:
     )
 
 
-def _epub_package(book_title: str, book_id: str, chapters: list[dict]) -> str:
+def _epub_package(
+    book_title: str,
+    book_id: str,
+    chapters: list[dict],
+    media_items: list[dict] | None = None,
+) -> str:
     """Return the OPF package document."""
     manifest_items = [
         '<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>',
         '<item id="css" href="styles.css" media-type="text/css"/>',
     ]
+    for media in media_items or []:
+        manifest_items.append(
+            f'<item id="{media["id"]}" href="{media["href"]}" '
+            f'media-type="{media["media_type"]}"/>'
+        )
     spine_items = []
     for i, chapter in enumerate(chapters, start=1):
         manifest_items.append(
@@ -600,7 +699,7 @@ def _epub_package(book_title: str, book_id: str, chapters: list[dict]) -> str:
 
     manifest = "\n    ".join(manifest_items)
     spine = "\n    ".join(spine_items)
-    modified = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    modified = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     safe_title = html.escape(book_title)
     return (
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
@@ -1166,14 +1265,47 @@ def build_epub(
     """Build an EPUB from multiple Google Docs, excluding PV review sections."""
     docs_service = _docs_service()
     chapters = []
+    media_items = []  # OPF manifest entries for images
+    media_files = []  # (epub href, bytes) to write into the zip
+    skipped_images = 0
     for index, doc_ref in enumerate(doc_ids_or_urls, start=1):
         doc_id = _extract_doc_id(doc_ref)
         doc = docs_service.documents().get(documentId=doc_id).execute()
         chapter_title = doc.get("title", f"Chapter {index}")
+        blocks = _extract_blocks(doc)
+
+        image_paths = {}
+        for block in blocks:
+            if block["type"] != "image":
+                continue
+            object_id = block["object_id"]
+            if object_id in image_paths:
+                continue
+            uri = _image_content_uri(doc, object_id)
+            if not uri:
+                skipped_images += 1
+                continue
+            try:
+                data, media_type = _download_image(uri)
+            except Exception:
+                # One bad image shouldn't abort a whole draft EPUB.
+                skipped_images += 1
+                continue
+            seq = len(image_paths) + 1
+            href = f"images/ch{index:02d}-img{seq:02d}.{_media_extension(media_type)}"
+            image_paths[object_id] = href
+            media_items.append({
+                "id": f"img-{index:02d}-{seq:02d}",
+                "href": href,
+                "media_type": media_type,
+            })
+            media_files.append((href, data))
+
         chapters.append({
             "title": chapter_title,
             "filename": _chapter_filename(index),
-            "xhtml": _blocks_to_xhtml(chapter_title, _extract_blocks(doc)),
+            "xhtml": _blocks_to_xhtml(chapter_title, blocks, image_paths),
+            "image_count": len(image_paths),
         })
 
     book_title = title or _default_epub_title([chapter["title"] for chapter in chapters])
@@ -1182,12 +1314,14 @@ def build_epub(
 
     book_id = str(uuid.uuid4())
     nav = _epub_nav(book_title, chapters)
-    package = _epub_package(book_title, book_id, chapters)
+    package = _epub_package(book_title, book_id, chapters, media_items)
     stylesheet = (
         "body { font-family: serif; line-height: 1.4; }\n"
         "h1, h2, h3, h4 { font-family: sans-serif; }\n"
         "section { max-width: 42em; margin: 0 auto; }\n"
         "p, li { margin: 0.6em 0; }\n"
+        "figure { margin: 1em 0; text-align: center; }\n"
+        "img { max-width: 100%; height: auto; }\n"
     )
 
     with zipfile.ZipFile(output_path, "w") as epub:
@@ -1208,13 +1342,21 @@ def build_epub(
         epub.writestr("OEBPS/styles.css", stylesheet)
         for chapter in chapters:
             epub.writestr(f"OEBPS/{chapter['filename']}", chapter["xhtml"])
+        for href, data in media_files:
+            epub.writestr(f"OEBPS/{href}", data)
 
     return {
         "status": "built",
         "title": book_title,
         "output": str(output_path),
+        "images_embedded": len(media_files),
+        "images_skipped": skipped_images,
         "chapters": [
-            {"title": chapter["title"], "filename": chapter["filename"]}
+            {
+                "title": chapter["title"],
+                "filename": chapter["filename"],
+                "images": chapter["image_count"],
+            }
             for chapter in chapters
         ],
     }
