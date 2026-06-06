@@ -82,6 +82,17 @@ Drop working review material into `context/` and longer-lived local reference ma
 
 ---
 
+## Limitations (Google Docs API)
+
+Two things the Google Docs / Drive APIs simply do not expose, which shape how `pv` works:
+
+- **No suggested edits.** There is no public API to create tracked "Suggesting mode" changes. Every edit `pv` makes (`pv edit`, `pv replace-block`, `pv insert-after`, `pv link`, etc.) is applied directly, as if in Editing mode. The API can *read* existing suggestions in a document, but it cannot *create* them. If you want a change to land as a suggestion, make it by hand in the Google Docs UI.
+- **No text-anchored comments.** There is no public API (Drive API, Docs API, or Apps Script) to create a comment anchored to a specific text range with the yellow in-document highlight. `pv comment` posts to the sidebar with the quoted text (`quotedFileContent`) for context, but without the highlight tying it to a location in the body.
+
+Because of these limits, `pv` favours the in-document **🪶 Ploma Vermella Review** section for located feedback — each note quotes the exact text it refers to, so the reader can find it without a highlight.
+
+---
+
 ## Development
 
 ```bash
