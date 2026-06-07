@@ -793,17 +793,26 @@ def _png_bytes(img):
     img.save(buf, format="PNG")
     return buf.getvalue()
 
-def test_downscale_image_shrinks_wide_image():
+def test_downscale_image_resizes_wide_image():
     big = _png_bytes(Image.frombytes("RGB", (2400, 300), os.urandom(2400 * 300 * 3)))
-    out, mt = _downscale_image(big, "image/png", 1600)
+    out, _mt = _downscale_image(big, "image/png", 1600)
     assert Image.open(io.BytesIO(out)).size == (1600, 200)
     assert len(out) < len(big)
+
+def test_downscale_image_photo_becomes_jpeg():
+    photo = _png_bytes(Image.frombytes("RGB", (1200, 1000), os.urandom(1200 * 1000 * 3)))
+    out, mt = _downscale_image(photo, "image/png", 1600)
+    assert mt == "image/jpeg"
+    assert len(out) < len(photo)
+
+def test_downscale_image_flat_diagram_stays_png():
+    flat = _png_bytes(Image.new("RGB", (1000, 800), (20, 40, 60)))
+    _out, mt = _downscale_image(flat, "image/png", 1600)
     assert mt == "image/png"
 
-def test_downscale_image_leaves_narrow_image_untouched():
-    small = _png_bytes(Image.new("RGB", (800, 600), (10, 20, 30)))
-    out, mt = _downscale_image(small, "image/png", 1600)
-    assert out == small
+def test_downscale_image_preserves_alpha_as_png():
+    rgba = _png_bytes(Image.new("RGBA", (1200, 1000), (10, 20, 30, 128)))
+    _out, mt = _downscale_image(rgba, "image/png", 1600)
     assert mt == "image/png"
 
 def test_downscale_image_passes_through_non_image():

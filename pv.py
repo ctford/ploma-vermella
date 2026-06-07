@@ -668,31 +668,41 @@ def _download_image(content_uri: str) -> tuple[bytes, str]:
 
 
 def _downscale_image(data: bytes, media_type: str, max_width: int) -> tuple[bytes, str]:
-    """Downscale an image wider than max_width and re-encode; return (bytes, media_type).
+    """Shrink an image for EPUB embedding; return (bytes, media_type).
 
-    The image format is preserved. Images at or under max_width, and anything that
-    fails to decode or does not get smaller, are returned unchanged.
+    Downscales to max_width, then encodes as whichever of PNG or JPEG is smaller —
+    PNG wins for flat diagrams (and stays crisp), JPEG wins for photographs and
+    screenshots. Transparency forces PNG. Undecodable data, and images that do not
+    get smaller, are returned unchanged.
     """
     import io
 
     from PIL import Image
     try:
         img = Image.open(io.BytesIO(data))
-        fmt = (img.format or "PNG").upper()
         width, height = img.size
-        if width <= max_width:
-            return data, media_type
-        if img.mode == "P":
-            img = img.convert("RGBA")
-        new_height = max(1, round(height * max_width / width))
-        img = img.resize((max_width, new_height), Image.LANCZOS)
-        buf = io.BytesIO()
-        if fmt in ("JPG", "JPEG"):
-            img.convert("RGB").save(buf, format="JPEG", quality=85, optimize=True)
-        else:
-            img.save(buf, format=fmt, optimize=True)
-        out = buf.getvalue()
-        return (out, media_type) if len(out) < len(data) else (data, media_type)
+        has_alpha = img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info)
+
+        resized = width > max_width
+        if resized:
+            base = img.convert("RGBA") if has_alpha else img.convert("RGB")
+            new_height = max(1, round(height * max_width / width))
+            img = base.resize((max_width, new_height), Image.LANCZOS)
+
+        candidates = []
+        png_src = img.convert("RGBA" if has_alpha else "RGB") if img.mode == "P" else img
+        png_buf = io.BytesIO()
+        png_src.save(png_buf, format="PNG", optimize=True)
+        candidates.append((png_buf.getvalue(), "image/png"))
+        if not has_alpha:
+            jpg_buf = io.BytesIO()
+            img.convert("RGB").save(jpg_buf, format="JPEG", quality=82, optimize=True)
+            candidates.append((jpg_buf.getvalue(), "image/jpeg"))
+
+        best_bytes, best_mt = min(candidates, key=lambda c: len(c[0]))
+        if resized or len(best_bytes) < len(data):
+            return best_bytes, best_mt
+        return data, media_type
     except Exception:
         return data, media_type
 
