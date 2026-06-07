@@ -8,3 +8,5 @@ __pycache__/
 dist/
 .DS_Store
 .playwright-mcp/
+# stray figure screenshots dropped in the repo root (book content, not tool code)
+/*.png
