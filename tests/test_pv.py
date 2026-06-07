@@ -1,9 +1,12 @@
 """Tests for pv.py — pure functions."""
 
 import inspect
+import io
+import os
 from datetime import datetime
 
 import pytest
+from PIL import Image
 
 from pv import (
     _block_html,
@@ -16,6 +19,7 @@ from pv import (
     _default_epub_title,
     _doc_index_at,
     _doc_text_runs,
+    _downscale_image,
     _epub_nav,
     _epub_package,
     _extract_blocks,
@@ -782,3 +786,27 @@ def test_find_matches_is_quote_agnostic():
     # straight in the doc, curly in the query
     doc2 = _fake_doc(_para(1, "a 'b'\n"))
     assert len(_find_matches(doc2, "a ‘b’")) == 1
+
+
+def _png_bytes(img):
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+def test_downscale_image_shrinks_wide_image():
+    big = _png_bytes(Image.frombytes("RGB", (2400, 300), os.urandom(2400 * 300 * 3)))
+    out, mt = _downscale_image(big, "image/png", 1600)
+    assert Image.open(io.BytesIO(out)).size == (1600, 200)
+    assert len(out) < len(big)
+    assert mt == "image/png"
+
+def test_downscale_image_leaves_narrow_image_untouched():
+    small = _png_bytes(Image.new("RGB", (800, 600), (10, 20, 30)))
+    out, mt = _downscale_image(small, "image/png", 1600)
+    assert out == small
+    assert mt == "image/png"
+
+def test_downscale_image_passes_through_non_image():
+    out, mt = _downscale_image(b"not an image", "image/png", 1600)
+    assert out == b"not an image"
+    assert mt == "image/png"

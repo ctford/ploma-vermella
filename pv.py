@@ -667,6 +667,36 @@ def _download_image(content_uri: str) -> tuple[bytes, str]:
     return resp.content, media_type
 
 
+def _downscale_image(data: bytes, media_type: str, max_width: int) -> tuple[bytes, str]:
+    """Downscale an image wider than max_width and re-encode; return (bytes, media_type).
+
+    The image format is preserved. Images at or under max_width, and anything that
+    fails to decode or does not get smaller, are returned unchanged.
+    """
+    import io
+
+    from PIL import Image
+    try:
+        img = Image.open(io.BytesIO(data))
+        fmt = (img.format or "PNG").upper()
+        width, height = img.size
+        if width <= max_width:
+            return data, media_type
+        if img.mode == "P":
+            img = img.convert("RGBA")
+        new_height = max(1, round(height * max_width / width))
+        img = img.resize((max_width, new_height), Image.LANCZOS)
+        buf = io.BytesIO()
+        if fmt in ("JPG", "JPEG"):
+            img.convert("RGB").save(buf, format="JPEG", quality=85, optimize=True)
+        else:
+            img.save(buf, format=fmt, optimize=True)
+        out = buf.getvalue()
+        return (out, media_type) if len(out) < len(data) else (data, media_type)
+    except Exception:
+        return data, media_type
+
+
 def _block_html(block: dict) -> str:
     """Inner HTML for a text block: prefer rich inline html, else escape text."""
     inline = block.get("html")
@@ -1466,11 +1496,15 @@ def build_epub(
     subtitle: str | None = None,
     author: str | None = None,
     cover: str | None = None,
+    max_image_width: int = 1600,
+    optimize_images: bool = True,
 ) -> dict:
     """Build an EPUB from multiple Google Docs, excluding PV review sections.
 
     title/subtitle/author are book metadata (book-specific — supply from the
     work's context, not hardcoded). cover is a local path or URL to a cover image.
+    When optimize_images is set, images wider than max_image_width are downscaled
+    and re-encoded to keep the EPUB small.
     """
     docs_service = _docs_service()
     chapters = []
@@ -1500,6 +1534,8 @@ def build_epub(
                 # One bad image shouldn't abort a whole draft EPUB.
                 skipped_images += 1
                 continue
+            if optimize_images:
+                data, media_type = _downscale_image(data, media_type, max_image_width)
             seq = len(image_paths) + 1
             href = f"images/ch{index:02d}-img{seq:02d}.{_media_extension(media_type)}"
             image_paths[object_id] = href
@@ -1529,6 +1565,8 @@ def build_epub(
     cover_image_id = None
     if cover:
         cover_bytes, cover_type = _read_cover_image(cover)
+        if optimize_images:
+            cover_bytes, cover_type = _downscale_image(cover_bytes, cover_type, max_image_width)
         cover_href = f"images/cover.{_media_extension(cover_type)}"
         cover_image_id = "cover-image"
         media_items.insert(0, {"id": cover_image_id, "href": cover_href, "media_type": cover_type})
@@ -2074,6 +2112,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--cover",
         help="Cover image (local path or URL) embedded as the EPUB cover.",
     )
+    p_epub.add_argument(
+        "--max-image-width",
+        type=int,
+        default=1600,
+        help="Downscale images wider than this many pixels (default 1600).",
+    )
+    p_epub.add_argument(
+        "--no-optimize",
+        action="store_true",
+        help="Don't downscale or re-encode images (embed at source resolution).",
+    )
 
     p_review_copy = sub.add_parser(
         "review-copy",
@@ -2247,6 +2296,8 @@ def main() -> None:
             subtitle=args.subtitle,
             author=args.author,
             cover=args.cover,
+            max_image_width=args.max_image_width,
+            optimize_images=not args.no_optimize,
         )
     elif args.command == "review-copy":
         result = make_review_copy(
