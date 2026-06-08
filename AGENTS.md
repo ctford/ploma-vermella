@@ -35,6 +35,16 @@ CLI tool that reviews Google Doc book chapters and posts feedback as comments.
 - `references/` — gitignored long-lived local reference material such as publisher style guides
 - `credentials/` — gitignored; contains OAuth credentials and token
 
+## Working durably with a work's context
+
+Conversation state is summarized away at compaction; only the repo survives. So:
+
+- **Don't assume a chapter's status.** Whether a chapter is drafted or a stub is recorded in
+  the work's `documents.md` (and is derivable from its draft/manuscript folder). Check it —
+  don't guess from memory, and don't drop planning bullets into a drafted chapter.
+- **Persist stabilized models.** When a conceptual model or decision firms up in discussion,
+  write it into the work's context repo before moving on, so it outlives the conversation.
+
 ## CLI (`pv`)
 
 Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
