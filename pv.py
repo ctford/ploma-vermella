@@ -505,11 +505,54 @@ def _paragraph_location(doc: dict, quoted_text: str) -> str:
     return ""
 
 
+def _render_para_elements(elements: list[dict]) -> str:
+    """Render paragraph text runs to markdown-ish text (links, strikethrough preserved)."""
+    parts = []
+    for pe in elements:
+        text_run = pe.get("textRun")
+        if not text_run:
+            continue
+        content = text_run.get("content", "")
+        style = text_run.get("textStyle", {})
+        url = style.get("link", {}).get("url")
+        strikethrough = style.get("strikethrough", False)
+        if url and content.strip():
+            parts.append(f"[{content}]({url})")
+        elif strikethrough and content.strip():
+            parts.append(f"~~{content}~~")
+        else:
+            parts.append(content)
+    return "".join(parts)
+
+
+def _render_table(table: dict) -> str:
+    """Render a Docs table as text: one row per line, cells joined with ' | '."""
+    lines = []
+    for row in table.get("tableRows", []):
+        cells = [
+            "".join(
+                _render_para_elements(ce.get("paragraph", {}).get("elements", []))
+                for ce in cell.get("content", [])
+            ).strip()
+            for cell in row.get("tableCells", [])
+        ]
+        lines.append(" | ".join(cells))
+    return "".join(line + "\n" for line in lines)
+
+
 def _extract_text(doc: dict) -> str:
-    """Extract plain text from a Google Docs document body, stopping before the review section."""
+    """Extract plain text from a Google Docs document body, stopping before the review section.
+
+    Table cells are rendered row by row (cells joined with ' | ') so tabular content
+    is included in the fetched text rather than silently dropped.
+    """
     parts = []
     body = doc.get("body", {})
     for element in body.get("content", []):
+        table = element.get("table")
+        if table:
+            parts.append(_render_table(table))
+            continue
         paragraph = element.get("paragraph")
         if not paragraph:
             continue
@@ -519,19 +562,7 @@ def _extract_text(doc: dict) -> str:
         ).rstrip("\n")
         if text == _REVIEW_HEADING:
             break
-        for pe in paragraph.get("elements", []):
-            text_run = pe.get("textRun")
-            if text_run:
-                content = text_run.get("content", "")
-                style = text_run.get("textStyle", {})
-                url = style.get("link", {}).get("url")
-                strikethrough = style.get("strikethrough", False)
-                if url and content.strip():
-                    parts.append(f"[{content}]({url})")
-                elif strikethrough and content.strip():
-                    parts.append(f"~~{content}~~")
-                else:
-                    parts.append(content)
+        parts.append(_render_para_elements(paragraph.get("elements", [])))
     return "".join(parts)
 
 

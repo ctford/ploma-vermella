@@ -147,6 +147,26 @@ def test_extract_text_stops_at_review_heading():
     ]}}
     assert _extract_text(doc) == "Chapter text.\n"
 
+def _cell(text):
+    return {"content": [{"paragraph": {"elements": [{"textRun": {"content": text + "\n"}}]}}]}
+
+def test_extract_text_renders_table_rows():
+    doc = {"body": {"content": [
+        {"table": {"tableRows": [
+            {"tableCells": [_cell("Scenario"), _cell("Rate")]},
+            {"tableCells": [_cell("Default"), _cell("52%")]},
+        ]}},
+    ]}}
+    assert _extract_text(doc) == "Scenario | Rate\nDefault | 52%\n"
+
+def test_extract_text_interleaves_table_with_paragraphs():
+    doc = {"body": {"content": [
+        {"paragraph": {"elements": [{"textRun": {"content": "Before.\n"}}]}},
+        {"table": {"tableRows": [{"tableCells": [_cell("A"), _cell("B")]}]}},
+        {"paragraph": {"elements": [{"textRun": {"content": "After.\n"}}]}},
+    ]}}
+    assert _extract_text(doc) == "Before.\nA | B\nAfter.\n"
+
 
 # ---------------------------------------------------------------------------
 # _parse_append_blocks
