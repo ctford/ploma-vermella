@@ -737,12 +737,16 @@ def test_map_comments_flattens_and_filters_resolved():
         {"id": "b", "content": "c2", "resolved": True},
     ]
     assert _map_comments(raw, include_resolved=False) == [
-        {"id": "a", "author": "X", "content": "c1", "quoted_text": "q1", "resolved": False},
+        {
+            "id": "a", "author": "X", "content": "c1",
+            "quoted_text": "q1", "resolved": False, "replies": [],
+        },
     ]
     both = _map_comments(raw, include_resolved=True)
     assert len(both) == 2
     assert both[1] == {
-        "id": "b", "author": "", "content": "c2", "quoted_text": "", "resolved": True,
+        "id": "b", "author": "", "content": "c2",
+        "quoted_text": "", "resolved": True, "replies": [],
     }
 
 

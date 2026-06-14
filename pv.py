@@ -1221,18 +1221,29 @@ def insert_image_at_body_index(
 
 
 def _map_comments(raw_comments: list[dict], include_resolved: bool) -> list[dict]:
-    """Flatten raw Drive comments to {id, author, content, quoted_text, resolved}."""
-    return [
-        {
+    """Flatten raw Drive comments (with replies) to structured dicts."""
+    out = []
+    for c in raw_comments:
+        if not include_resolved and c.get("resolved", False):
+            continue
+        replies = [
+            {
+                "id": r.get("id", ""),
+                "author": r.get("author", {}).get("displayName", ""),
+                "content": r.get("content", ""),
+            }
+            for r in c.get("replies", [])
+            if not r.get("deleted", False)
+        ]
+        out.append({
             "id": c.get("id", ""),
             "author": c.get("author", {}).get("displayName", ""),
             "content": c.get("content", ""),
             "quoted_text": c.get("quotedFileContent", {}).get("value", ""),
             "resolved": c.get("resolved", False),
-        }
-        for c in raw_comments
-        if include_resolved or not c.get("resolved", False)
-    ]
+            "replies": replies,
+        })
+    return out
 
 
 def _fetch_comments(doc_id: str, include_resolved: bool = False) -> list[dict]:
@@ -1244,7 +1255,8 @@ def _fetch_comments(doc_id: str, include_resolved: bool = False) -> list[dict]:
         kwargs: dict = {
             "fileId": doc_id,
             "fields": (
-                "comments(id,author,content,quotedFileContent,resolved),"
+                "comments(id,author,content,quotedFileContent,resolved,"
+                "replies(id,author,content,deleted)),"
                 "nextPageToken"
             ),
             "includeDeleted": False,
