@@ -46,6 +46,7 @@ from pv import (
     _parse_append_blocks,
     _parse_hex_color,
     _parse_table_row,
+    _plan_edit_matches,
     _review_copy_title,
     _shape_text,
     _slugify,
@@ -166,6 +167,50 @@ def test_extract_text_interleaves_table_with_paragraphs():
         {"paragraph": {"elements": [{"textRun": {"content": "After.\n"}}]}},
     ]}}
     assert _extract_text(doc) == "Before.\nA | B\nAfter.\n"
+
+
+# ---------------------------------------------------------------------------
+# _plan_edit_matches (the ambiguous result contract)
+# ---------------------------------------------------------------------------
+
+def _plan(flat, old, all_occurrences=False, occurrence=None):
+    return _plan_edit_matches(flat, flat, old, old, all_occurrences, occurrence)
+
+def test_plan_edit_single_match_is_ok():
+    plan = _plan("the quick brown fox", "quick")
+    assert plan["kind"] == "ok"
+    assert plan["positions"] == [4]
+
+def test_plan_edit_multiple_matches_is_ambiguous():
+    plan = _plan("a cat and a cat", "cat")
+    assert plan["kind"] == "ambiguous"
+    result = plan["result"]
+    assert result["status"] == "ambiguous"
+    assert result["reason"] == "multiple_matches"
+    assert [o["id"] for o in result["options"]] == [1, 2]
+    assert result["resolution"]["field"] == "occurrence"
+
+def test_plan_edit_all_occurrences_replaces_every_match():
+    plan = _plan("a cat and a cat", "cat", all_occurrences=True)
+    assert plan["kind"] == "ok"
+    assert plan["positions"] == [2, 12]
+
+def test_plan_edit_occurrence_selects_one():
+    plan = _plan("a cat and a cat", "cat", occurrence=2)
+    assert plan["kind"] == "ok"
+    assert plan["positions"] == [12]
+
+def test_plan_edit_occurrence_out_of_range_is_ambiguous():
+    plan = _plan("a cat and a cat", "cat", occurrence=5)
+    assert plan["kind"] == "ambiguous"
+    assert plan["result"]["reason"] == "occurrence_out_of_range"
+
+def test_plan_edit_no_match_offers_closest_partial():
+    flat = "the regeneration process is the controller"
+    plan = _plan(flat, "the regeneration process is the comptroller")
+    assert plan["kind"] == "ambiguous"
+    assert plan["result"]["reason"] == "no_match"
+    assert "regeneration process" in plan["result"]["options"][0]["context"]
 
 
 # ---------------------------------------------------------------------------

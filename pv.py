@@ -1,6 +1,7 @@
 """Google Docs API logic — fetch document content and write review notes."""
 
 import argparse
+import difflib
 import html
 import json
 import mimetypes
@@ -1377,19 +1378,123 @@ def comment_document(doc_id_or_url: str, quoted_text: str, comment: str) -> dict
     }
 
 
+def _ambiguous(
+    reason: str,
+    message: str,
+    *,
+    options: list | None = None,
+    resolution: dict | None = None,
+    question: str | None = None,
+) -> dict:
+    """Build a 'needs disambiguation' result: PV could act but won't choose for you."""
+    out: dict = {"status": "ambiguous", "reason": reason, "message": message}
+    if question is not None:
+        out["question"] = question
+    if options is not None:
+        out["options"] = options
+    if resolution is not None:
+        out["resolution"] = resolution
+    return out
+
+
+def _occurrence_options(flat: str, positions: list[int], length: int) -> list[dict]:
+    """One option per match, with surrounding context, for the caller to choose from."""
+    options = []
+    for n, pos in enumerate(positions, 1):
+        ctx = flat[max(0, pos - 40):pos + length + 40].replace("\n", " ").strip()
+        options.append({"id": n, "flat_pos": pos, "context": f"...{ctx}..."})
+    return options
+
+
+def _fuzzy_candidates(flat: str, nflat: str, nold: str, min_len: int = 8) -> list[dict]:
+    """Best partial match for a no-match case, so the caller can recover from drift."""
+    if not nflat or not nold:
+        return []
+    matcher = difflib.SequenceMatcher(None, nflat, nold, autojunk=False)
+    block = matcher.find_longest_match(0, len(nflat), 0, len(nold))
+    if block.size < min_len:
+        return []
+    pos = block.a
+    ctx = flat[max(0, pos - 40):pos + block.size + 40].replace("\n", " ").strip()
+    return [{"matched_chars": block.size, "context": f"...{ctx}..."}]
+
+
+def _plan_edit_matches(
+    flat: str,
+    nflat: str,
+    old: str,
+    nold: str,
+    all_occurrences: bool,
+    occurrence: int | None,
+) -> dict:
+    """Decide which match(es) to edit, or report an ambiguous result.
+
+    Pure (no API calls). Returns {"kind": "ok", "positions": [...]} or
+    {"kind": "ambiguous", "result": <ambiguous payload>}.
+    """
+    positions = []
+    i = nflat.find(nold)
+    while i != -1:
+        positions.append(i)
+        i = nflat.find(nold, i + len(nold))
+
+    if not positions:
+        return {"kind": "ambiguous", "result": _ambiguous(
+            "no_match",
+            f"No match for {old!r}; the text may have changed since the doc was read.",
+            options=_fuzzy_candidates(flat, nflat, nold),
+            resolution={
+                "how": "re_call_with",
+                "field": "old",
+                "hint": "re-fetch the doc and anchor on its current text",
+            },
+        )}
+
+    if occurrence is not None:
+        if occurrence < 1 or occurrence > len(positions):
+            return {"kind": "ambiguous", "result": _ambiguous(
+                "occurrence_out_of_range",
+                f"occurrence {occurrence} is out of range; there are {len(positions)} matches.",
+                options=_occurrence_options(flat, positions, len(old)),
+                resolution={"how": "re_call_with", "field": "occurrence"},
+            )}
+        return {"kind": "ok", "positions": [positions[occurrence - 1]]}
+
+    if len(positions) > 1 and not all_occurrences:
+        return {"kind": "ambiguous", "result": _ambiguous(
+            "multiple_matches",
+            f"{len(positions)} matches for {old!r}; PV will not choose which.",
+            question="Which occurrence did you mean?",
+            options=_occurrence_options(flat, positions, len(old)),
+            resolution={
+                "how": "re_call_with",
+                "field": "occurrence",
+                "example": "pv edit <doc> <old> <new> --occurrence 2",
+            },
+        )}
+
+    return {"kind": "ok", "positions": positions}
+
+
 def edit_document(
     doc_id_or_url: str,
     old: str,
     new: str,
     all_occurrences: bool = False,
+    occurrence: int | None = None,
 ) -> dict:
     """
     Replace text in a Google Doc.
 
-    By default, requires exactly one match for `old` in the body. Pass
-    all_occurrences=True to replace every occurrence. Edits are applied in
-    reverse-index order so earlier inserts don't shift later positions.
+    Requires a single match for `old` by default. When `old` matches several
+    places, returns an 'ambiguous' result listing the occurrences (pass
+    all_occurrences=True to replace all, or occurrence=N to pick one). When it
+    matches nothing, returns an 'ambiguous' result with the closest partial
+    match. Edits apply in reverse-index order so earlier inserts don't shift
+    later positions.
     """
+    if not old:
+        raise ValueError("old must not be empty")
     doc_id = _extract_doc_id(doc_id_or_url)
     service = _docs_service()
     doc = service.documents().get(documentId=doc_id).execute()
@@ -1417,30 +1522,13 @@ def edit_document(
             pos += len(text)
         raise IndexError(f"flat position {flat_pos} out of range")
 
-    matches = []
-    search_from = 0
-    while True:
-        idx = nflat.find(nold, search_from)
-        if idx == -1:
-            break
-        matches.append(idx)
-        search_from = idx + len(nold)
-
-    if not matches:
-        raise ValueError(f"no match for {old!r}")
-    if len(matches) > 1 and not all_occurrences:
-        contexts = [
-            flat[max(0, m - 40):m + len(old) + 40].replace("\n", " ")
-            for m in matches
-        ]
-        listing = "\n".join(f"  {i+1}. ...{c}..." for i, c in enumerate(contexts))
-        raise ValueError(
-            f"{len(matches)} matches for {old!r}; pass all_occurrences=True "
-            f"to replace all, or narrow the search string:\n{listing}"
-        )
+    plan = _plan_edit_matches(flat, nflat, old, nold, all_occurrences, occurrence)
+    if plan["kind"] == "ambiguous":
+        return plan["result"]
+    positions = plan["positions"]
 
     requests = []
-    for flat_pos in sorted(matches, reverse=True):
+    for flat_pos in sorted(positions, reverse=True):
         start = doc_index_at(flat_pos)
         end = start + _utf16_len(old)
         requests.append({"deleteContentRange": {"range": {"startIndex": start, "endIndex": end}}})
@@ -1448,7 +1536,7 @@ def edit_document(
             requests.append({"insertText": {"location": {"index": start}, "text": new}})
 
     service.documents().batchUpdate(documentId=doc_id, body={"requests": requests}).execute()
-    return {"status": "edited", "occurrences_replaced": len(matches), "old": old, "new": new}
+    return {"status": "edited", "occurrences_replaced": len(positions), "old": old, "new": new}
 
 
 def find_text(doc_id_or_url: str, text: str) -> dict:
@@ -2244,6 +2332,12 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="all_occurrences",
         help="Replace every occurrence. Default: require exactly one match.",
     )
+    p_edit.add_argument(
+        "--occurrence",
+        type=int,
+        default=None,
+        help="Pick the Nth match (1-based) when OLD matches several places.",
+    )
 
     p_find = sub.add_parser(
         "find",
@@ -2372,7 +2466,10 @@ def main() -> None:
     elif args.command == "comment":
         result = comment_document(args.doc, args.quoted_text, args.comment)
     elif args.command == "edit":
-        result = edit_document(args.doc, args.old, args.new, all_occurrences=args.all_occurrences)
+        result = edit_document(
+            args.doc, args.old, args.new,
+            all_occurrences=args.all_occurrences, occurrence=args.occurrence,
+        )
     elif args.command == "find":
         result = find_text(args.doc, args.text)
     elif args.command == "insert-after":
