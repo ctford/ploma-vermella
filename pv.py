@@ -286,10 +286,84 @@ def _find_matches(doc: dict, text: str) -> list[dict]:
     return matches
 
 
+def _match_dict_options(matches: list[dict]) -> list[dict]:
+    """One option per match dict (from _find_matches), with trimmed context."""
+    options = []
+    for n, m in enumerate(matches, 1):
+        ctx = m.get("context", "")
+        if len(ctx) > 120:
+            ctx = ctx[:120] + "..."
+        options.append({"id": n, "body_index": m.get("body_index"), "context": ctx})
+    return options
+
+
+def _fuzzy_for_doc(doc: dict, text: str) -> list[dict]:
+    """Closest partial match for `text` in the doc, for no-match recovery."""
+    flat = "".join(t for _, t in _doc_text_runs(doc))
+    return _fuzzy_candidates(flat, _normalize_quotes(flat), _normalize_quotes(text))
+
+
+def _select_matches(
+    matches: list[dict],
+    all_occurrences: bool,
+    occurrence: int | None,
+    *,
+    text: str,
+    resolution_example: str,
+    fuzzy_options: list[dict] | None = None,
+) -> dict:
+    """Choose which match(es) to act on, or report an ambiguous result.
+
+    Operates on _find_matches dicts. Returns {"kind": "ok", "targets": [...]} or
+    {"kind": "ambiguous", "result": <ambiguous payload>}.
+    """
+    if not matches:
+        return {"kind": "ambiguous", "result": _ambiguous(
+            "no_match",
+            f"No match for {text!r}; the text may have changed since the doc was read.",
+            options=fuzzy_options or [],
+            resolution={
+                "how": "re_call_with",
+                "field": "text",
+                "hint": "re-fetch the doc and anchor on its current text",
+            },
+        )}
+    if occurrence is not None:
+        if occurrence < 1 or occurrence > len(matches):
+            return {"kind": "ambiguous", "result": _ambiguous(
+                "occurrence_out_of_range",
+                f"occurrence {occurrence} is out of range; there are {len(matches)} matches.",
+                options=_match_dict_options(matches),
+                resolution={"how": "re_call_with", "field": "occurrence"},
+            )}
+        return {"kind": "ok", "targets": [matches[occurrence - 1]]}
+    if len(matches) > 1 and not all_occurrences:
+        return {"kind": "ambiguous", "result": _ambiguous(
+            "multiple_matches",
+            f"{len(matches)} matches for {text!r}; PV will not choose which.",
+            question="Which occurrence did you mean?",
+            options=_match_dict_options(matches),
+            resolution={
+                "how": "re_call_with",
+                "field": "occurrence",
+                "example": resolution_example,
+            },
+        )}
+    return {"kind": "ok", "targets": matches if all_occurrences else matches[:1]}
+
+
 def _insert_after_plan(
-    doc: dict, anchor: str, text: str, require_unique: bool = True
-) -> tuple[dict, int]:
-    """Build the insertText request that places `text` after the anchor's paragraph."""
+    doc: dict,
+    anchor: str,
+    text: str,
+    require_unique: bool = True,
+    occurrence: int | None = None,
+) -> dict:
+    """Build the insertText request that places `text` after the anchor's paragraph.
+
+    Returns {"kind": "ok", "request": ..., "body_index": ...} or
+    {"kind": "ambiguous", "result": <ambiguous payload>}.
+    """
     if not anchor:
         raise ValueError("anchor must not be empty")
     content = doc.get("body", {}).get("content", [])
@@ -299,17 +373,48 @@ def _insert_after_plan(
         if el.get("paragraph") and nanchor in _normalize_quotes(_paragraph_text(el))
     ]
     if not hits:
-        raise ValueError(f"anchor not found: {anchor!r}")
-    if len(hits) > 1 and require_unique:
-        raise ValueError(
-            f"anchor matches {len(hits)} paragraphs; make it unique or pass allow_multiple"
-        )
-    body_index, el = hits[0]
+        return {"kind": "ambiguous", "result": _ambiguous(
+            "no_match",
+            f"anchor not found: {anchor!r}; the text may have changed since the doc was read.",
+            options=_fuzzy_for_doc(doc, anchor),
+            resolution={
+                "how": "re_call_with",
+                "field": "anchor",
+                "hint": "re-fetch the doc and anchor on its current text",
+            },
+        )}
+    options = [
+        {"id": n, "body_index": i, "context": _paragraph_text(el).strip()[:120]}
+        for n, (i, el) in enumerate(hits, 1)
+    ]
+    if occurrence is not None:
+        if occurrence < 1 or occurrence > len(hits):
+            return {"kind": "ambiguous", "result": _ambiguous(
+                "occurrence_out_of_range",
+                f"occurrence {occurrence} is out of range; there are {len(hits)} anchor matches.",
+                options=options,
+                resolution={"how": "re_call_with", "field": "occurrence"},
+            )}
+        body_index, el = hits[occurrence - 1]
+    elif len(hits) > 1 and require_unique:
+        return {"kind": "ambiguous", "result": _ambiguous(
+            "multiple_matches",
+            f"anchor matches {len(hits)} paragraphs; PV will not choose which.",
+            question="Which paragraph did you mean to insert after?",
+            options=options,
+            resolution={
+                "how": "re_call_with",
+                "field": "occurrence",
+                "example": "pv insert-after <doc> <anchor> <text> --occurrence 2",
+            },
+        )}
+    else:
+        body_index, el = hits[0]
     # Insert just before the paragraph's terminating newline so the new
     # paragraph(s) inherit the anchor paragraph's style.
     insert_index = el["endIndex"] - 1
     request = {"insertText": {"location": {"index": insert_index}, "text": "\n" + text}}
-    return request, body_index
+    return {"kind": "ok", "request": request, "body_index": body_index}
 
 
 def _parse_hex_color(hex_color: str) -> dict:
@@ -332,8 +437,13 @@ def _style_plan(
     underline: bool = False,
     color: str | None = None,
     all_occurrences: bool = False,
-) -> tuple[list[dict], list[dict]]:
-    """Build updateTextStyle requests applying character styles to `text`."""
+    occurrence: int | None = None,
+) -> dict:
+    """Build updateTextStyle requests applying character styles to `text`.
+
+    Returns {"kind": "ok", "requests": [...], "spans": [...]} or
+    {"kind": "ambiguous", "result": <ambiguous payload>}.
+    """
     style: dict = {}
     fields: list[str] = []
     if italic:
@@ -352,13 +462,14 @@ def _style_plan(
         raise ValueError("specify at least one of italic, bold, underline, or color")
 
     matches = _find_matches(doc, text)
-    if not matches:
-        raise ValueError(f"text not found: {text!r}")
-    if len(matches) > 1 and not all_occurrences:
-        raise ValueError(
-            f"text matches {len(matches)} times; make it unique or pass all_occurrences"
-        )
-    targets = matches if all_occurrences else matches[:1]
+    sel = _select_matches(
+        matches, all_occurrences, occurrence, text=text,
+        resolution_example="pv style <doc> <text> --italic --occurrence 2",
+        fuzzy_options=_fuzzy_for_doc(doc, text) if not matches else None,
+    )
+    if sel["kind"] == "ambiguous":
+        return sel
+    targets = sel["targets"]
     requests = [
         {"updateTextStyle": {
             "range": {"startIndex": m["start_index"], "endIndex": m["end_index"]},
@@ -368,21 +479,27 @@ def _style_plan(
         for m in targets
     ]
     spans = [{"start_index": m["start_index"], "end_index": m["end_index"]} for m in targets]
-    return requests, spans
+    return {"kind": "ok", "requests": requests, "spans": spans}
 
 
 def _link_plan(
-    doc: dict, text: str, url: str, all_occurrences: bool = False
-) -> tuple[list[dict], list[dict]]:
-    """Build updateTextStyle requests that hyperlink occurrences of `text`."""
+    doc: dict, text: str, url: str, all_occurrences: bool = False,
+    occurrence: int | None = None,
+) -> dict:
+    """Build updateTextStyle requests that hyperlink occurrences of `text`.
+
+    Returns {"kind": "ok", "requests": [...], "spans": [...]} or
+    {"kind": "ambiguous", "result": <ambiguous payload>}.
+    """
     matches = _find_matches(doc, text)
-    if not matches:
-        raise ValueError(f"text not found: {text!r}")
-    if len(matches) > 1 and not all_occurrences:
-        raise ValueError(
-            f"text matches {len(matches)} times; make it unique or pass all_occurrences"
-        )
-    targets = matches if all_occurrences else matches[:1]
+    sel = _select_matches(
+        matches, all_occurrences, occurrence, text=text,
+        resolution_example="pv link <doc> <text> <url> --occurrence 2",
+        fuzzy_options=_fuzzy_for_doc(doc, text) if not matches else None,
+    )
+    if sel["kind"] == "ambiguous":
+        return sel
+    targets = sel["targets"]
     requests = [
         {"updateTextStyle": {
             "range": {"startIndex": m["start_index"], "endIndex": m["end_index"]},
@@ -395,7 +512,7 @@ def _link_plan(
         {"start_index": m["start_index"], "end_index": m["end_index"]}
         for m in targets
     ]
-    return requests, spans
+    return {"kind": "ok", "requests": requests, "spans": spans}
 
 
 def _is_table_separator(line: str, columns: int) -> bool:
@@ -1548,54 +1665,62 @@ def find_text(doc_id_or_url: str, text: str) -> dict:
 
 
 def insert_after(
-    doc_id_or_url: str, anchor: str, text: str, allow_multiple: bool = False
+    doc_id_or_url: str, anchor: str, text: str, allow_multiple: bool = False,
+    occurrence: int | None = None,
 ) -> dict:
     """
     Insert `text` as new paragraph(s) after the paragraph containing `anchor`.
 
     The new paragraphs inherit the anchor paragraph's style. Use blank lines in
-    `text` to create multiple paragraphs. Raises if the anchor is missing, or
-    ambiguous unless allow_multiple is set (then the first match is used).
+    `text` to create multiple paragraphs. Returns an 'ambiguous' result when the
+    anchor is missing or matches several paragraphs (pass allow_multiple to use
+    the first, or occurrence=N to pick one).
     """
     doc_id = _extract_doc_id(doc_id_or_url)
     service = _docs_service()
     doc = service.documents().get(documentId=doc_id).execute()
-    request, body_index = _insert_after_plan(
-        doc, anchor, text, require_unique=not allow_multiple
+    plan = _insert_after_plan(
+        doc, anchor, text, require_unique=not allow_multiple, occurrence=occurrence
     )
+    if plan["kind"] == "ambiguous":
+        return plan["result"]
     service.documents().batchUpdate(
-        documentId=doc_id, body={"requests": [request]}
+        documentId=doc_id, body={"requests": [plan["request"]]}
     ).execute()
     return {
         "status": "inserted",
-        "after_body_index": body_index,
+        "after_body_index": plan["body_index"],
         "anchor": anchor,
         "text": text,
     }
 
 
 def link_text(
-    doc_id_or_url: str, text: str, url: str, all_occurrences: bool = False
+    doc_id_or_url: str, text: str, url: str, all_occurrences: bool = False,
+    occurrence: int | None = None,
 ) -> dict:
     """
     Hyperlink occurrences of `text` to `url`, preserving other text styling.
 
-    By default requires exactly one match; pass all_occurrences=True to link
-    every occurrence. Raises if the text is not found.
+    Requires a single match by default; pass all_occurrences=True to link every
+    occurrence, or occurrence=N to pick one. Returns an 'ambiguous' result when
+    the text matches several places or none.
     """
     doc_id = _extract_doc_id(doc_id_or_url)
     service = _docs_service()
     doc = service.documents().get(documentId=doc_id).execute()
-    requests, spans = _link_plan(doc, text, url, all_occurrences=all_occurrences)
+    plan = _link_plan(doc, text, url, all_occurrences=all_occurrences, occurrence=occurrence)
+    if plan["kind"] == "ambiguous":
+        return plan["result"]
     service.documents().batchUpdate(
-        documentId=doc_id, body={"requests": requests}
+        documentId=doc_id, body={"requests": plan["requests"]}
     ).execute()
     return {
         "status": "linked",
         "text": text,
         "url": url,
-        "occurrences": len(spans),
-        "spans": spans,
+        "occurrences": len(plan["spans"]),
+        "spans": plan["spans"],
     }
 
 
@@ -1607,26 +1732,30 @@ def style_text(
     underline: bool = False,
     color: str | None = None,
     all_occurrences: bool = False,
+    occurrence: int | None = None,
 ) -> dict:
     """
     Apply character styling (italic/bold/underline/color) to occurrences of `text`,
-    preserving other styling. Requires exactly one match unless all_occurrences is set.
+    preserving other styling. Requires a single match unless all_occurrences is set
+    or occurrence=N is given; otherwise returns an 'ambiguous' result.
     """
     doc_id = _extract_doc_id(doc_id_or_url)
     service = _docs_service()
     doc = service.documents().get(documentId=doc_id).execute()
-    requests, spans = _style_plan(
+    plan = _style_plan(
         doc, text, italic=italic, bold=bold, underline=underline,
-        color=color, all_occurrences=all_occurrences,
+        color=color, all_occurrences=all_occurrences, occurrence=occurrence,
     )
+    if plan["kind"] == "ambiguous":
+        return plan["result"]
     service.documents().batchUpdate(
-        documentId=doc_id, body={"requests": requests}
+        documentId=doc_id, body={"requests": plan["requests"]}
     ).execute()
     return {
         "status": "styled",
         "text": text,
-        "occurrences": len(spans),
-        "spans": spans,
+        "occurrences": len(plan["spans"]),
+        "spans": plan["spans"],
     }
 
 
@@ -2362,6 +2491,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Insert after the first match even if the anchor is not unique.",
     )
+    p_insert_after.add_argument(
+        "--occurrence",
+        type=int,
+        default=None,
+        help="Insert after the Nth matching paragraph (1-based).",
+    )
 
     p_link = sub.add_parser("link", help="Hyperlink a span of text in a doc.")
     p_link.add_argument("doc", metavar="DOC_URL")
@@ -2372,6 +2507,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         dest="all_occurrences",
         help="Link every occurrence. Default: require exactly one match.",
+    )
+    p_link.add_argument(
+        "--occurrence",
+        type=int,
+        default=None,
+        help="Link the Nth match (1-based) when TEXT matches several places.",
     )
 
     p_style = sub.add_parser(
@@ -2389,6 +2530,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         dest="all_occurrences",
         help="Style every occurrence. Default: require exactly one match.",
+    )
+    p_style.add_argument(
+        "--occurrence",
+        type=int,
+        default=None,
+        help="Style the Nth match (1-based) when TEXT matches several places.",
     )
 
     return parser
@@ -2473,14 +2620,20 @@ def main() -> None:
     elif args.command == "find":
         result = find_text(args.doc, args.text)
     elif args.command == "insert-after":
-        result = insert_after(args.doc, args.anchor, args.text, allow_multiple=args.allow_multiple)
+        result = insert_after(
+            args.doc, args.anchor, args.text,
+            allow_multiple=args.allow_multiple, occurrence=args.occurrence,
+        )
     elif args.command == "link":
-        result = link_text(args.doc, args.text, args.url, all_occurrences=args.all_occurrences)
+        result = link_text(
+            args.doc, args.text, args.url,
+            all_occurrences=args.all_occurrences, occurrence=args.occurrence,
+        )
     elif args.command == "style":
         result = style_text(
             args.doc, args.text,
             italic=args.italic, bold=args.bold, underline=args.underline,
-            color=args.color, all_occurrences=args.all_occurrences,
+            color=args.color, all_occurrences=args.all_occurrences, occurrence=args.occurrence,
         )
     else:
         result = append_review_note(args.doc, args.quoted_text, args.comment)

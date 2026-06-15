@@ -631,25 +631,38 @@ def test_is_code_paragraph_mixed_fonts_is_false():
 
 def test_insert_after_plan_builds_request():
     doc = _fake_doc(_para(1, "Intro line.\n"), _para(13, "Anchor paragraph here.\n"))
-    request, body_index = _insert_after_plan(doc, "Anchor paragraph", "NEW PARAGRAPH")
-    assert body_index == 1
-    assert request["insertText"]["location"]["index"] == 35
-    assert request["insertText"]["text"] == "\nNEW PARAGRAPH"
+    plan = _insert_after_plan(doc, "Anchor paragraph", "NEW PARAGRAPH")
+    assert plan["kind"] == "ok"
+    assert plan["body_index"] == 1
+    assert plan["request"]["insertText"]["location"]["index"] == 35
+    assert plan["request"]["insertText"]["text"] == "\nNEW PARAGRAPH"
 
-def test_insert_after_plan_missing_anchor_raises():
-    with pytest.raises(ValueError):
-        _insert_after_plan(_fake_doc(_para(1, "x\n")), "nope", "y")
+def test_insert_after_plan_missing_anchor_is_ambiguous():
+    plan = _insert_after_plan(_fake_doc(_para(1, "x\n")), "nope", "y")
+    assert plan["kind"] == "ambiguous"
+    assert plan["result"]["reason"] == "no_match"
 
-def test_insert_after_plan_ambiguous_raises_then_allows():
+def test_insert_after_plan_ambiguous_then_allow_multiple():
     doc = _fake_doc(_para(1, "shared token\n"), _para(14, "shared token again\n"))
-    with pytest.raises(ValueError):
-        _insert_after_plan(doc, "shared token", "y")
-    _request, body_index = _insert_after_plan(doc, "shared token", "y", require_unique=False)
-    assert body_index == 0
+    plan = _insert_after_plan(doc, "shared token", "y")
+    assert plan["kind"] == "ambiguous"
+    assert plan["result"]["reason"] == "multiple_matches"
+    assert [o["id"] for o in plan["result"]["options"]] == [1, 2]
+    allowed = _insert_after_plan(doc, "shared token", "y", require_unique=False)
+    assert allowed["kind"] == "ok"
+    assert allowed["body_index"] == 0
+
+def test_insert_after_plan_occurrence_selects():
+    doc = _fake_doc(_para(1, "shared token\n"), _para(14, "shared token again\n"))
+    plan = _insert_after_plan(doc, "shared token", "y", occurrence=2)
+    assert plan["kind"] == "ok"
+    assert plan["body_index"] == 1
 
 def test_link_plan_builds_update_request():
     doc = _fake_doc(_para(1, "See the Lean Startup here.\n"))
-    requests, spans = _link_plan(doc, "Lean Startup", "http://example.com")
+    plan = _link_plan(doc, "Lean Startup", "http://example.com")
+    assert plan["kind"] == "ok"
+    requests, spans = plan["requests"], plan["spans"]
     assert len(requests) == 1
     style = requests[0]["updateTextStyle"]
     assert style["range"] == {"startIndex": 9, "endIndex": 21}
@@ -657,16 +670,19 @@ def test_link_plan_builds_update_request():
     assert style["fields"] == "link"
     assert spans == [{"start_index": 9, "end_index": 21}]
 
-def test_link_plan_missing_text_raises():
-    with pytest.raises(ValueError):
-        _link_plan(_fake_doc(_para(1, "hello\n")), "zzz", "http://e")
+def test_link_plan_missing_text_is_ambiguous():
+    plan = _link_plan(_fake_doc(_para(1, "hello\n")), "zzz", "http://e")
+    assert plan["kind"] == "ambiguous"
+    assert plan["result"]["reason"] == "no_match"
 
-def test_link_plan_ambiguous_requires_all_occurrences():
+def test_link_plan_ambiguous_then_all_occurrences():
     doc = _fake_doc(_para(1, "go go\n"))
-    with pytest.raises(ValueError):
-        _link_plan(doc, "go", "http://e")
-    requests, _spans = _link_plan(doc, "go", "http://e", all_occurrences=True)
-    assert len(requests) == 2
+    plan = _link_plan(doc, "go", "http://e")
+    assert plan["kind"] == "ambiguous"
+    assert plan["result"]["reason"] == "multiple_matches"
+    allowed = _link_plan(doc, "go", "http://e", all_occurrences=True)
+    assert allowed["kind"] == "ok"
+    assert len(allowed["requests"]) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -826,7 +842,9 @@ def test_parse_hex_color():
 
 def test_style_plan_builds_request_with_chosen_fields():
     doc = _fake_doc(_para(1, "see Lean Startup now\n"))
-    requests, spans = _style_plan(doc, "Lean Startup", italic=True, color="#d3002d")
+    plan = _style_plan(doc, "Lean Startup", italic=True, color="#d3002d")
+    assert plan["kind"] == "ok"
+    requests, spans = plan["requests"], plan["spans"]
     style = requests[0]["updateTextStyle"]
     assert style["range"] == {"startIndex": 5, "endIndex": 17}
     assert style["textStyle"]["italic"] is True
@@ -838,9 +856,10 @@ def test_style_plan_requires_a_style():
     with pytest.raises(ValueError):
         _style_plan(_fake_doc(_para(1, "text\n")), "text")
 
-def test_style_plan_missing_text_raises():
-    with pytest.raises(ValueError):
-        _style_plan(_fake_doc(_para(1, "hello\n")), "zzz", italic=True)
+def test_style_plan_missing_text_is_ambiguous():
+    plan = _style_plan(_fake_doc(_para(1, "hello\n")), "zzz", italic=True)
+    assert plan["kind"] == "ambiguous"
+    assert plan["result"]["reason"] == "no_match"
 
 
 def test_normalize_quotes_folds_curly_to_straight():
