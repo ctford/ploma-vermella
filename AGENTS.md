@@ -70,6 +70,7 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
 .venv/bin/pv find <doc-url> <text>                     # locate text: indices, style, is_code, context
 .venv/bin/pv outline <doc-url> [--full]                # structural map: headings + images (indices, object IDs)
 .venv/bin/pv insert-after <doc-url> <anchor> <text>    # insert paragraph(s) after an anchor paragraph
+.venv/bin/pv insert-before <doc-url> <anchor> <text>   # insert paragraph(s) before an anchor paragraph
 .venv/bin/pv link <doc-url> <text> <url> [--all]       # hyperlink a span of text
 .venv/bin/pv cite <doc-url> <title> <url> [--all]      # italicize + hyperlink a work title (book citation)
 .venv/bin/pv style <doc-url> <text> [--italic|--bold|--underline|--color HEX] [--all]  # character styling

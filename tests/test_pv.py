@@ -37,6 +37,7 @@ from pv import (
     _inline_html,
     _inline_object_ids,
     _insert_after_plan,
+    _insert_before_plan,
     _is_code_paragraph,
     _is_image_paragraph,
     _is_table_separator,
@@ -1172,3 +1173,34 @@ def test_cite_plan_occurrence_selects_one():
 def test_build_parser_cite():
     a = _build_parser().parse_args(["cite", "DOC", "Title", "URL", "--occurrence", "2"])
     assert a.command == "cite" and a.occurrence == 2
+
+
+# ---------------------------------------------------------------------------
+# pv insert-before
+# ---------------------------------------------------------------------------
+def test_insert_before_plan_inserts_at_paragraph_start():
+    doc = {"body": {"content": [
+        _ol_para("First.\n", "NORMAL_TEXT", 1, 8),
+        _ol_para("Target paragraph.\n", "NORMAL_TEXT", 8, 26),
+    ]}}
+    plan = _insert_before_plan(doc, "Target paragraph", "New line.")
+    assert plan["kind"] == "ok"
+    req = plan["request"]["insertText"]
+    assert req["location"]["index"] == 8
+    assert req["text"] == "New line.\n"
+    assert plan["body_index"] == 1
+
+
+def test_insert_before_plan_ambiguous_anchor():
+    doc = {"body": {"content": [
+        _ol_para("a point\n", "NORMAL_TEXT", 1, 9),
+        _ol_para("a point\n", "NORMAL_TEXT", 9, 17),
+    ]}}
+    plan = _insert_before_plan(doc, "point", "x")
+    assert plan["kind"] == "ambiguous"
+    assert plan["result"]["reason"] == "multiple_matches"
+
+
+def test_build_parser_insert_before():
+    a = _build_parser().parse_args(["insert-before", "DOC", "anchor", "text", "--occurrence", "3"])
+    assert a.command == "insert-before" and a.occurrence == 3

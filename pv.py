@@ -464,6 +464,29 @@ def _insert_after_plan(
     return {"kind": "ok", "request": request, "body_index": body_index}
 
 
+def _insert_before_plan(
+    doc: dict,
+    anchor: str,
+    text: str,
+    require_unique: bool = True,
+    occurrence: int | None = None,
+) -> dict:
+    """Build the insertText request that places `text` before the anchor's paragraph.
+
+    The new paragraph(s) take the anchor paragraph's style. Returns an ok or
+    ambiguous result.
+    """
+    sel = _select_anchor(
+        doc, anchor, occurrence, require_unique,
+        resolution_example="pv insert-before <doc> <anchor> <text> --occurrence 2",
+    )
+    if sel["kind"] == "ambiguous":
+        return sel
+    insert_index = sel["element"]["startIndex"]
+    request = {"insertText": {"location": {"index": insert_index}, "text": text + "\n"}}
+    return {"kind": "ok", "request": request, "body_index": sel["body_index"]}
+
+
 def _parse_hex_color(hex_color: str) -> dict:
     """Parse '#rrggbb' (or 'rrggbb') into a Docs API rgbColor (floats 0..1)."""
     h = hex_color.lstrip("#")
@@ -2073,6 +2096,37 @@ def insert_after(
     }
 
 
+def insert_before(
+    doc_id_or_url: str, anchor: str, text: str, allow_multiple: bool = False,
+    occurrence: int | None = None,
+) -> dict:
+    """
+    Insert `text` as new paragraph(s) before the paragraph containing `anchor`.
+
+    The new paragraphs take the anchor paragraph's style. Use blank lines in
+    `text` for multiple paragraphs. Returns an 'ambiguous' result when the anchor
+    is missing or matches several paragraphs (pass allow_multiple to use the
+    first, or occurrence=N to pick one).
+    """
+    doc_id = _extract_doc_id(doc_id_or_url)
+    service = _docs_service()
+    doc = service.documents().get(documentId=doc_id).execute()
+    plan = _insert_before_plan(
+        doc, anchor, text, require_unique=not allow_multiple, occurrence=occurrence
+    )
+    if plan["kind"] == "ambiguous":
+        return plan["result"]
+    service.documents().batchUpdate(
+        documentId=doc_id, body={"requests": [plan["request"]]}
+    ).execute()
+    return {
+        "status": "inserted",
+        "before_body_index": plan["body_index"],
+        "anchor": anchor,
+        "text": text,
+    }
+
+
 def link_text(
     doc_id_or_url: str, text: str, url: str, all_occurrences: bool = False,
     occurrence: int | None = None,
@@ -3012,6 +3066,26 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Insert after the Nth matching paragraph (1-based).",
     )
 
+    p_insert_before = sub.add_parser(
+        "insert-before",
+        help="Insert text as new paragraph(s) before the paragraph containing an anchor.",
+    )
+    p_insert_before.add_argument("doc", metavar="DOC_URL")
+    p_insert_before.add_argument(
+        "anchor", metavar="ANCHOR", help="Unique substring of the target paragraph."
+    )
+    p_insert_before.add_argument(
+        "text", metavar="TEXT", help="Text to insert; use blank lines for multiple paragraphs."
+    )
+    p_insert_before.add_argument(
+        "--allow-multiple", action="store_true",
+        help="Insert before the first match even if the anchor is not unique.",
+    )
+    p_insert_before.add_argument(
+        "--occurrence", type=int, default=None,
+        help="Insert before the Nth matching paragraph (1-based).",
+    )
+
     p_link = sub.add_parser("link", help="Hyperlink a span of text in a doc.")
     p_link.add_argument("doc", metavar="DOC_URL")
     p_link.add_argument("text", metavar="TEXT", help="Exact span to hyperlink.")
@@ -3203,6 +3277,11 @@ def main() -> None:
         result = outline_document(args.doc, full=args.full)
     elif args.command == "insert-after":
         result = insert_after(
+            args.doc, args.anchor, args.text,
+            allow_multiple=args.allow_multiple, occurrence=args.occurrence,
+        )
+    elif args.command == "insert-before":
+        result = insert_before(
             args.doc, args.anchor, args.text,
             allow_multiple=args.allow_multiple, occurrence=args.occurrence,
         )
