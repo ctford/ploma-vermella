@@ -51,6 +51,8 @@ from pv import (
     _parse_hex_color,
     _parse_table_row,
     _plan_edit_matches,
+    _preceding_image_id,
+    _replace_image_plan,
     _review_copy_title,
     _shape_text,
     _slugify,
@@ -1057,3 +1059,57 @@ def test_build_parser_heading_and_bullets():
     assert a.command == "heading" and a.level == "2"
     b = _build_parser().parse_args(["bullets", "DOC", "start", "end", "--ordered"])
     assert b.command == "bullets" and b.ordered is True and b.end == "end"
+
+
+# ---------------------------------------------------------------------------
+# pv replace-image
+# ---------------------------------------------------------------------------
+FIGURE_DOC = {"body": {"content": [
+    _ol_para("Body text before.\n", "NORMAL_TEXT", 1, 19),
+    _ol_para("\n", "NORMAL_TEXT", 19, 21, image_id="kix.fig1"),
+    _ol_para("Figure 1-1. The first figure.\n", "NORMAL_TEXT", 21, 51),
+    _ol_para("More body text.\n", "NORMAL_TEXT", 51, 67),
+    _ol_para("\n", "NORMAL_TEXT", 67, 69, image_id="kix.fig2"),
+    _ol_para("Figure 1-2. The second figure.\n", "NORMAL_TEXT", 69, 100),
+]}}
+
+
+def test_preceding_image_id_finds_image_above_caption():
+    content = FIGURE_DOC["body"]["content"]
+    assert _preceding_image_id(content, 2) == "kix.fig1"
+    assert _preceding_image_id(content, 5) == "kix.fig2"
+
+
+def test_preceding_image_id_none_when_text_intervenes():
+    content = FIGURE_DOC["body"]["content"]
+    assert _preceding_image_id(content, 3) is None
+
+
+def test_replace_image_plan_resolves_caption_to_object_id():
+    plan = _replace_image_plan(FIGURE_DOC, "Figure 1-2.")
+    assert plan["kind"] == "ok"
+    assert plan["object_id"] == "kix.fig2"
+    assert plan["caption_body_index"] == 5
+
+
+def test_replace_image_plan_missing_caption_is_ambiguous():
+    plan = _replace_image_plan(FIGURE_DOC, "Figure 9-9.")
+    assert plan["kind"] == "ambiguous"
+    assert plan["result"]["reason"] == "no_match"
+
+
+def test_replace_image_plan_caption_without_image_is_ambiguous():
+    doc = {"body": {"content": [
+        _ol_para("Figure 3-1. Orphan caption.\n", "NORMAL_TEXT", 1, 30),
+    ]}}
+    plan = _replace_image_plan(doc, "Figure 3-1.")
+    assert plan["kind"] == "ambiguous"
+    assert plan["result"]["reason"] == "no_image"
+
+
+def test_build_parser_replace_image():
+    a = _build_parser().parse_args(
+        ["replace-image", "DOC", "Figure 1-1.", "DECK", "g123", "--size", "MEDIUM"]
+    )
+    assert a.command == "replace-image"
+    assert a.caption == "Figure 1-1." and a.slide_id == "g123" and a.size == "MEDIUM"

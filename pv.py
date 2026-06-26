@@ -698,6 +698,69 @@ def _bullets_plan(
     }
 
 
+def _preceding_image_id(content: list[dict], body_index: int) -> str | None:
+    """Inline-object ID of the image directly above `body_index` (blank lines allowed)."""
+    j = body_index - 1
+    while j >= 0:
+        el = content[j]
+        if _is_image_paragraph(el):
+            ids = _inline_object_ids(el)
+            return ids[0] if ids else None
+        if _paragraph_text(el).strip():
+            return None  # a non-blank, non-image paragraph: no image directly above
+        j -= 1
+    return None
+
+
+def _replace_image_plan(doc: dict, caption_anchor: str) -> dict:
+    """Find the image directly above the caption paragraph matching `caption_anchor`.
+
+    Returns {"kind": "ok", "object_id": str, "caption_body_index": int} or
+    {"kind": "ambiguous", "result": <ambiguous payload>}.
+    """
+    if not caption_anchor:
+        raise ValueError("caption anchor must not be empty")
+    content = doc.get("body", {}).get("content", [])
+    hits = _anchor_hits(doc, caption_anchor)
+    if not hits:
+        return {"kind": "ambiguous", "result": _ambiguous(
+            "no_match",
+            f"caption not found: {caption_anchor!r}; it may have changed since the doc was read.",
+            options=_fuzzy_for_doc(doc, caption_anchor),
+            resolution={
+                "how": "re_call_with", "field": "caption",
+                "hint": "re-fetch the doc and anchor on its current caption text",
+            },
+        )}
+    figures = [
+        (i, el, _preceding_image_id(content, i)) for i, el in hits
+    ]
+    figures = [(i, el, obj) for i, el, obj in figures if obj]
+    if not figures:
+        return {"kind": "ambiguous", "result": _ambiguous(
+            "no_image",
+            f"found the caption {caption_anchor!r} but no image directly above it.",
+            resolution={
+                "how": "re_call_with", "field": "caption",
+                "hint": "anchor on a caption that sits directly below its figure",
+            },
+        )}
+    if len(figures) > 1:
+        options = [
+            {"id": n, "body_index": i, "context": _paragraph_text(el).strip()[:120]}
+            for n, (i, el, _obj) in enumerate(figures, 1)
+        ]
+        return {"kind": "ambiguous", "result": _ambiguous(
+            "multiple_matches",
+            f"caption {caption_anchor!r} matches {len(figures)} figures; PV will not choose which.",
+            question="Which figure did you mean?",
+            options=options,
+            resolution={"how": "re_call_with", "field": "caption"},
+        )}
+    i, _el, obj = figures[0]
+    return {"kind": "ok", "object_id": obj, "caption_body_index": i}
+
+
 def _is_table_separator(line: str, columns: int) -> bool:
     """Return True if line looks like a markdown table separator row."""
     try:
@@ -1470,6 +1533,37 @@ def figure_map(doc_id_or_url: str) -> dict:
     return {
         "title": doc.get("title", ""),
         "figures": _figure_map_from_doc(doc),
+    }
+
+
+def replace_image(
+    doc_id_or_url: str, caption_anchor: str, deck: str, slide_id: str, size: str = "LARGE",
+) -> dict:
+    """
+    Re-export a figure: replace the image directly above the caption paragraph
+    matching `caption_anchor` with the current thumbnail of slide `slide_id` from
+    presentation `deck`. Returns an 'ambiguous' result when the caption is missing,
+    matches several figures, or has no image directly above it.
+    """
+    doc_id = _extract_doc_id(doc_id_or_url)
+    service = _docs_service()
+    doc = service.documents().get(documentId=doc_id).execute()
+    plan = _replace_image_plan(doc, caption_anchor)
+    if plan["kind"] == "ambiguous":
+        return plan["result"]
+    uri = presentation_thumbnail(deck, slide_id, size)["content_url"]
+    service.documents().batchUpdate(documentId=doc_id, body={"requests": [
+        {"replaceImage": {
+            "imageObjectId": plan["object_id"],
+            "uri": uri,
+            "imageReplaceMethod": "CENTER_CROP",
+        }}
+    ]}).execute()
+    return {
+        "status": "replaced",
+        "object_id": plan["object_id"],
+        "caption_body_index": plan["caption_body_index"],
+        "slide_id": slide_id,
     }
 
 
@@ -2581,6 +2675,21 @@ def _build_parser() -> argparse.ArgumentParser:
     p_insert_image.add_argument("--width-pt", type=float, default=468.0)
     p_insert_image.add_argument("--height-pt", type=float, default=263.25)
 
+    p_replace_image = sub.add_parser(
+        "replace-image",
+        help="Re-export a figure: swap the image above a caption with a slide's thumbnail.",
+    )
+    p_replace_image.add_argument("doc", metavar="DOC_URL")
+    p_replace_image.add_argument(
+        "caption", metavar="CAPTION", help="Substring of the figure's caption paragraph."
+    )
+    p_replace_image.add_argument("deck", metavar="DECK_URL")
+    p_replace_image.add_argument("slide_id", metavar="SLIDE_ID")
+    p_replace_image.add_argument(
+        "--size", choices=["SMALL", "MEDIUM", "LARGE"], default="LARGE",
+        help="Thumbnail size. Default: LARGE.",
+    )
+
     sub.add_parser("clear", help="Delete the Ploma Vermella Review section.").add_argument(
         "doc", metavar="DOC_URL"
     )
@@ -2881,6 +2990,8 @@ def main() -> None:
             width_pt=args.width_pt,
             height_pt=args.height_pt,
         )
+    elif args.command == "replace-image":
+        result = replace_image(args.doc, args.caption, args.deck, args.slide_id, size=args.size)
     elif args.command == "clear":
         result = clear_review_section(args.doc)
     elif args.command == "append":
