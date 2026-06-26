@@ -562,6 +562,142 @@ def _link_plan(
     return {"kind": "ok", "requests": requests, "spans": spans}
 
 
+_LEVEL_TO_STYLE = {
+    "0": "NORMAL_TEXT", "normal": "NORMAL_TEXT", "body": "NORMAL_TEXT",
+    "1": "HEADING_1", "2": "HEADING_2", "3": "HEADING_3",
+    "4": "HEADING_4", "5": "HEADING_5", "6": "HEADING_6",
+    "title": "TITLE", "subtitle": "SUBTITLE",
+}
+
+
+def _named_style_for_level(level: str) -> str:
+    """Map a CLI level (1-6, normal, title, subtitle) to a Docs namedStyleType."""
+    key = str(level).strip().lower()
+    if key not in _LEVEL_TO_STYLE:
+        raise ValueError(
+            f"unknown heading level {level!r}; use 1-6, normal, title, or subtitle"
+        )
+    return _LEVEL_TO_STYLE[key]
+
+
+def _anchor_hits(doc: dict, anchor: str) -> list[tuple[int, dict]]:
+    """Body paragraphs whose text contains `anchor` (quote-normalized)."""
+    nanchor = _normalize_quotes(anchor)
+    return [
+        (i, el) for i, el in enumerate(doc.get("body", {}).get("content", []))
+        if el.get("paragraph") and nanchor in _normalize_quotes(_paragraph_text(el))
+    ]
+
+
+def _select_anchor(
+    doc: dict, anchor: str, occurrence: int | None, require_unique: bool,
+    *, resolution_example: str,
+) -> dict:
+    """Resolve a paragraph anchor to a single body element, or report ambiguity.
+
+    Returns {"kind": "ok", "body_index": int, "element": dict} or
+    {"kind": "ambiguous", "result": <ambiguous payload>}.
+    """
+    if not anchor:
+        raise ValueError("anchor must not be empty")
+    hits = _anchor_hits(doc, anchor)
+    if not hits:
+        return {"kind": "ambiguous", "result": _ambiguous(
+            "no_match",
+            f"anchor not found: {anchor!r}; the text may have changed since the doc was read.",
+            options=_fuzzy_for_doc(doc, anchor),
+            resolution={
+                "how": "re_call_with", "field": "anchor",
+                "hint": "re-fetch the doc and anchor on its current text",
+            },
+        )}
+    options = [
+        {"id": n, "body_index": i, "context": _paragraph_text(el).strip()[:120]}
+        for n, (i, el) in enumerate(hits, 1)
+    ]
+    if occurrence is not None:
+        if occurrence < 1 or occurrence > len(hits):
+            return {"kind": "ambiguous", "result": _ambiguous(
+                "occurrence_out_of_range",
+                f"occurrence {occurrence} is out of range; there are {len(hits)} anchor matches.",
+                options=options,
+                resolution={"how": "re_call_with", "field": "occurrence"},
+            )}
+        i, el = hits[occurrence - 1]
+        return {"kind": "ok", "body_index": i, "element": el}
+    if len(hits) > 1 and require_unique:
+        return {"kind": "ambiguous", "result": _ambiguous(
+            "multiple_matches",
+            f"anchor matches {len(hits)} paragraphs; PV will not choose which.",
+            question="Which paragraph did you mean?",
+            options=options,
+            resolution={
+                "how": "re_call_with", "field": "occurrence", "example": resolution_example,
+            },
+        )}
+    i, el = hits[0]
+    return {"kind": "ok", "body_index": i, "element": el}
+
+
+def _heading_plan(
+    doc: dict, anchor: str, named_style: str, occurrence: int | None = None,
+    require_unique: bool = True,
+) -> dict:
+    """Build the updateParagraphStyle request that sets the anchor paragraph's
+    named style. Returns an ok or ambiguous result."""
+    sel = _select_anchor(
+        doc, anchor, occurrence, require_unique,
+        resolution_example="pv heading <doc> <anchor> 1 --occurrence 2",
+    )
+    if sel["kind"] == "ambiguous":
+        return sel
+    el = sel["element"]
+    request = {"updateParagraphStyle": {
+        "range": {"startIndex": el["startIndex"], "endIndex": el["endIndex"]},
+        "paragraphStyle": {"namedStyleType": named_style},
+        "fields": "namedStyleType",
+    }}
+    return {
+        "kind": "ok", "request": request,
+        "body_index": sel["body_index"], "named_style": named_style,
+    }
+
+
+def _bullets_plan(
+    doc: dict, start_anchor: str, end_anchor: str | None = None, ordered: bool = False,
+    start_occurrence: int | None = None, end_occurrence: int | None = None,
+) -> dict:
+    """Build the createParagraphBullets request over the paragraphs from
+    `start_anchor` to `end_anchor` (inclusive). Returns an ok or ambiguous result."""
+    start = _select_anchor(
+        doc, start_anchor, start_occurrence, True,
+        resolution_example="pv bullets <doc> <start> <end> --start-occurrence 2",
+    )
+    if start["kind"] == "ambiguous":
+        return start
+    if end_anchor:
+        end = _select_anchor(
+            doc, end_anchor, end_occurrence, True,
+            resolution_example="pv bullets <doc> <start> <end> --end-occurrence 2",
+        )
+        if end["kind"] == "ambiguous":
+            return end
+    else:
+        end = start
+    first, last = sorted(
+        (start["element"], end["element"]), key=lambda el: el["startIndex"]
+    )
+    preset = "NUMBERED_DECIMAL_ALPHA_ROMAN" if ordered else "BULLET_DISC_CIRCLE_SQUARE"
+    request = {"createParagraphBullets": {
+        "range": {"startIndex": first["startIndex"], "endIndex": last["endIndex"]},
+        "bulletPreset": preset,
+    }}
+    return {
+        "kind": "ok", "request": request, "preset": preset,
+        "start_body_index": start["body_index"], "end_body_index": end["body_index"],
+    }
+
+
 def _is_table_separator(line: str, columns: int) -> bool:
     """Return True if line looks like a markdown table separator row."""
     try:
@@ -1780,6 +1916,64 @@ def link_text(
     }
 
 
+def set_heading(
+    doc_id_or_url: str, anchor: str, level: str, allow_multiple: bool = False,
+    occurrence: int | None = None,
+) -> dict:
+    """
+    Set the named paragraph style of the paragraph containing `anchor`: a heading
+    level (1-6), `normal`, `title`, or `subtitle`. Returns an 'ambiguous' result
+    when the anchor is missing or matches several paragraphs (pass allow_multiple
+    to use the first, or occurrence=N to pick one).
+    """
+    doc_id = _extract_doc_id(doc_id_or_url)
+    named_style = _named_style_for_level(level)
+    service = _docs_service()
+    doc = service.documents().get(documentId=doc_id).execute()
+    plan = _heading_plan(
+        doc, anchor, named_style, occurrence=occurrence, require_unique=not allow_multiple
+    )
+    if plan["kind"] == "ambiguous":
+        return plan["result"]
+    service.documents().batchUpdate(
+        documentId=doc_id, body={"requests": [plan["request"]]}
+    ).execute()
+    return {
+        "status": "styled", "anchor": anchor,
+        "named_style": named_style, "body_index": plan["body_index"],
+    }
+
+
+def set_bullets(
+    doc_id_or_url: str, start_anchor: str, end_anchor: str | None = None,
+    ordered: bool = False, start_occurrence: int | None = None,
+    end_occurrence: int | None = None,
+) -> dict:
+    """
+    Turn the paragraphs from `start_anchor` to `end_anchor` (inclusive) into a
+    bulleted list, or a numbered list with ordered=True. Pass only start_anchor to
+    bullet a single paragraph. Returns an 'ambiguous' result when an anchor is
+    missing or matches several paragraphs (pass start/end_occurrence to pick one).
+    """
+    doc_id = _extract_doc_id(doc_id_or_url)
+    service = _docs_service()
+    doc = service.documents().get(documentId=doc_id).execute()
+    plan = _bullets_plan(
+        doc, start_anchor, end_anchor, ordered=ordered,
+        start_occurrence=start_occurrence, end_occurrence=end_occurrence,
+    )
+    if plan["kind"] == "ambiguous":
+        return plan["result"]
+    service.documents().batchUpdate(
+        documentId=doc_id, body={"requests": [plan["request"]]}
+    ).execute()
+    return {
+        "status": "bulleted", "preset": plan["preset"],
+        "start_body_index": plan["start_body_index"],
+        "end_body_index": plan["end_body_index"],
+    }
+
+
 def style_text(
     doc_id_or_url: str,
     text: str,
@@ -2605,6 +2799,48 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Style the Nth match (1-based) when TEXT matches several places.",
     )
 
+    p_heading = sub.add_parser(
+        "heading",
+        help="Set a paragraph's style (heading level, normal, title) by anchor.",
+    )
+    p_heading.add_argument("doc", metavar="DOC_URL")
+    p_heading.add_argument(
+        "anchor", metavar="ANCHOR", help="Unique substring of the target paragraph."
+    )
+    p_heading.add_argument("level", metavar="LEVEL", help="1-6, normal, title, or subtitle.")
+    p_heading.add_argument(
+        "--allow-multiple", action="store_true",
+        help="Apply to the first match even if the anchor is not unique.",
+    )
+    p_heading.add_argument(
+        "--occurrence", type=int, default=None,
+        help="Target the Nth matching paragraph (1-based).",
+    )
+
+    p_bullets = sub.add_parser(
+        "bullets",
+        help="Turn a contiguous range of paragraphs into a bulleted or numbered list.",
+    )
+    p_bullets.add_argument("doc", metavar="DOC_URL")
+    p_bullets.add_argument(
+        "start", metavar="START_ANCHOR", help="Substring of the first list paragraph."
+    )
+    p_bullets.add_argument(
+        "end", metavar="END_ANCHOR", nargs="?", default=None,
+        help="Substring of the last list paragraph (default: just START).",
+    )
+    p_bullets.add_argument(
+        "--ordered", action="store_true", help="Numbered list instead of bullets."
+    )
+    p_bullets.add_argument(
+        "--start-occurrence", type=int, default=None,
+        help="Pick the Nth match for START (1-based).",
+    )
+    p_bullets.add_argument(
+        "--end-occurrence", type=int, default=None,
+        help="Pick the Nth match for END (1-based).",
+    )
+
     return parser
 
 
@@ -2703,6 +2939,16 @@ def main() -> None:
             args.doc, args.text,
             italic=args.italic, bold=args.bold, underline=args.underline,
             color=args.color, all_occurrences=args.all_occurrences, occurrence=args.occurrence,
+        )
+    elif args.command == "heading":
+        result = set_heading(
+            args.doc, args.anchor, args.level,
+            allow_multiple=args.allow_multiple, occurrence=args.occurrence,
+        )
+    elif args.command == "bullets":
+        result = set_bullets(
+            args.doc, args.start, args.end, ordered=args.ordered,
+            start_occurrence=args.start_occurrence, end_occurrence=args.end_occurrence,
         )
     else:
         result = append_review_note(args.doc, args.quoted_text, args.comment)

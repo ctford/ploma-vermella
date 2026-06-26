@@ -70,6 +70,8 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
 .venv/bin/pv insert-after <doc-url> <anchor> <text>    # insert paragraph(s) after an anchor paragraph
 .venv/bin/pv link <doc-url> <text> <url> [--all]       # hyperlink a span of text
 .venv/bin/pv style <doc-url> <text> [--italic|--bold|--underline|--color HEX] [--all]  # character styling
+.venv/bin/pv heading <doc-url> <anchor> <level>        # set a paragraph's style (1-6, normal, title) by anchor
+.venv/bin/pv bullets <doc-url> <start> [end] [--ordered]  # make a paragraph range a bulleted/numbered list
 .venv/bin/pv comment <doc-url> <quoted-text> <text>    # anchored sidebar comment
 .venv/bin/pv comments <doc-url> [--include-resolved]   # list comments: id, content, quoted text, resolved
 .venv/bin/pv resolve <doc-url> <comment-id>            # resolve a comment

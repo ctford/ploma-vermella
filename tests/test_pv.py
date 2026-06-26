@@ -13,6 +13,7 @@ from pv import (
     _blocks_to_xhtml,
     _body_element_at,
     _build_parser,
+    _bullets_plan,
     _chapter_filename,
     _cover_page_xhtml,
     _default_epub_output_path,
@@ -30,6 +31,7 @@ from pv import (
     _extract_text,
     _figure_map_from_doc,
     _find_matches,
+    _heading_plan,
     _image_content_uri,
     _inline_html,
     _inline_object_ids,
@@ -40,6 +42,7 @@ from pv import (
     _link_plan,
     _map_comments,
     _media_extension,
+    _named_style_for_level,
     _normalize_quotes,
     _outline_from_doc,
     _paragraph_location,
@@ -915,9 +918,9 @@ def test_downscale_image_passes_through_non_image():
 # ---------------------------------------------------------------------------
 def _ol_para(text, style="NORMAL_TEXT", start=0, end=0, bullet=False, image_id=None):
     if image_id is not None:
-        elements = [{"inlineObjectElement": {"inlineObjectId": image_id}}]
+        elements = [{"startIndex": start, "inlineObjectElement": {"inlineObjectId": image_id}}]
     else:
-        elements = [{"textRun": {"content": text}}]
+        elements = [{"startIndex": start, "textRun": {"content": text}}]
     paragraph = {"elements": elements, "paragraphStyle": {"namedStyleType": style}}
     if bullet:
         paragraph["bullet"] = {"listId": "L1"}
@@ -969,3 +972,88 @@ def test_build_parser_outline_full_flag():
     args = _build_parser().parse_args(["outline", "DOC", "--full"])
     assert args.command == "outline"
     assert args.full is True
+
+
+# ---------------------------------------------------------------------------
+# pv heading / pv bullets
+# ---------------------------------------------------------------------------
+STYLE_DOC = {"body": {"content": [
+    _ol_para("Intro.\n", "NORMAL_TEXT", 1, 8),
+    _ol_para("My Section\n", "NORMAL_TEXT", 8, 19),
+    _ol_para("First point.\n", "NORMAL_TEXT", 19, 32),
+    _ol_para("Second point.\n", "NORMAL_TEXT", 32, 46),
+    _ol_para("Third point.\n", "NORMAL_TEXT", 46, 59),
+    _ol_para("Outro.\n", "NORMAL_TEXT", 59, 66),
+]}}
+
+
+def test_named_style_for_level_maps_levels():
+    assert _named_style_for_level("1") == "HEADING_1"
+    assert _named_style_for_level("3") == "HEADING_3"
+    assert _named_style_for_level("normal") == "NORMAL_TEXT"
+    assert _named_style_for_level("Title") == "TITLE"
+
+
+def test_named_style_for_level_rejects_unknown():
+    with pytest.raises(ValueError):
+        _named_style_for_level("banner")
+
+
+def test_heading_plan_sets_named_style_over_paragraph_range():
+    plan = _heading_plan(STYLE_DOC, "My Section", "HEADING_1")
+    assert plan["kind"] == "ok"
+    req = plan["request"]["updateParagraphStyle"]
+    assert req["paragraphStyle"]["namedStyleType"] == "HEADING_1"
+    assert req["range"] == {"startIndex": 8, "endIndex": 19}
+    assert req["fields"] == "namedStyleType"
+
+
+def test_heading_plan_ambiguous_anchor_reports_options():
+    plan = _heading_plan(STYLE_DOC, "point", "HEADING_2")
+    assert plan["kind"] == "ambiguous"
+    assert plan["result"]["reason"] == "multiple_matches"
+    assert len(plan["result"]["options"]) == 3
+
+
+def test_heading_plan_missing_anchor_is_ambiguous():
+    plan = _heading_plan(STYLE_DOC, "no such paragraph", "HEADING_1")
+    assert plan["kind"] == "ambiguous"
+    assert plan["result"]["reason"] == "no_match"
+
+
+def test_heading_plan_occurrence_selects_one():
+    plan = _heading_plan(STYLE_DOC, "point", "HEADING_2", occurrence=2)
+    assert plan["kind"] == "ok"
+    assert plan["request"]["updateParagraphStyle"]["range"]["startIndex"] == 32
+
+
+def test_bullets_plan_spans_anchor_range():
+    plan = _bullets_plan(STYLE_DOC, "First point", "Third point")
+    assert plan["kind"] == "ok"
+    req = plan["request"]["createParagraphBullets"]
+    assert req["range"] == {"startIndex": 19, "endIndex": 59}
+    assert req["bulletPreset"] == "BULLET_DISC_CIRCLE_SQUARE"
+
+
+def test_bullets_plan_single_paragraph_when_no_end():
+    plan = _bullets_plan(STYLE_DOC, "First point")
+    rng = plan["request"]["createParagraphBullets"]["range"]
+    assert rng == {"startIndex": 19, "endIndex": 32}
+
+
+def test_bullets_plan_ordered_uses_numbered_preset():
+    plan = _bullets_plan(STYLE_DOC, "First point", "Second point", ordered=True)
+    preset = plan["request"]["createParagraphBullets"]["bulletPreset"]
+    assert preset == "NUMBERED_DECIMAL_ALPHA_ROMAN"
+
+
+def test_bullets_plan_normalizes_reversed_anchors():
+    plan = _bullets_plan(STYLE_DOC, "Third point", "First point")
+    assert plan["request"]["createParagraphBullets"]["range"] == {"startIndex": 19, "endIndex": 59}
+
+
+def test_build_parser_heading_and_bullets():
+    a = _build_parser().parse_args(["heading", "DOC", "anchor", "2"])
+    assert a.command == "heading" and a.level == "2"
+    b = _build_parser().parse_args(["bullets", "DOC", "start", "end", "--ordered"])
+    assert b.command == "bullets" and b.ordered is True and b.end == "end"
