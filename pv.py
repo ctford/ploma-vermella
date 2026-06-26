@@ -761,6 +761,36 @@ def _replace_image_plan(doc: dict, caption_anchor: str) -> dict:
     return {"kind": "ok", "object_id": obj, "caption_body_index": i}
 
 
+def _place_figure_requests(
+    insert_index: int, uri: str, caption: str, width_pt: float, height_pt: float,
+) -> list[dict]:
+    """Requests to place a centered image + caption after `insert_index`.
+
+    `insert_index` is the position of the anchor paragraph's terminating newline.
+    Produces: blank line, the (centered) image on its own paragraph, the caption
+    paragraph below it, then a trailing blank line — applied in one batchUpdate.
+    """
+    img_index = insert_index + 2
+    return [
+        {"insertText": {
+            "location": {"index": insert_index}, "text": "\n\n\n" + caption + "\n",
+        }},
+        {"insertInlineImage": {
+            "location": {"index": img_index},
+            "uri": uri,
+            "objectSize": {
+                "width": {"magnitude": width_pt, "unit": "PT"},
+                "height": {"magnitude": height_pt, "unit": "PT"},
+            },
+        }},
+        {"updateParagraphStyle": {
+            "range": {"startIndex": img_index, "endIndex": img_index + 1},
+            "paragraphStyle": {"alignment": "CENTER"},
+            "fields": "alignment",
+        }},
+    ]
+
+
 def _is_table_separator(line: str, columns: int) -> bool:
     """Return True if line looks like a markdown table separator row."""
     try:
@@ -1563,6 +1593,38 @@ def replace_image(
         "status": "replaced",
         "object_id": plan["object_id"],
         "caption_body_index": plan["caption_body_index"],
+        "slide_id": slide_id,
+    }
+
+
+def place_figure(
+    doc_id_or_url: str, after_anchor: str, deck: str, slide_id: str, caption: str,
+    width_pt: float = 468.0, height_pt: float = 263.25, size: str = "LARGE",
+    allow_multiple: bool = False, occurrence: int | None = None,
+) -> dict:
+    """
+    Insert a centered image (the thumbnail of slide `slide_id` from `deck`) with
+    `caption` below it, as new paragraphs after the paragraph containing
+    `after_anchor`. Returns an 'ambiguous' result when the anchor is missing or
+    matches several paragraphs (pass allow_multiple or occurrence=N).
+    """
+    doc_id = _extract_doc_id(doc_id_or_url)
+    service = _docs_service()
+    doc = service.documents().get(documentId=doc_id).execute()
+    sel = _select_anchor(
+        doc, after_anchor, occurrence, not allow_multiple,
+        resolution_example="pv place-figure ... --occurrence 2",
+    )
+    if sel["kind"] == "ambiguous":
+        return sel["result"]
+    insert_index = sel["element"]["endIndex"] - 1
+    uri = presentation_thumbnail(deck, slide_id, size)["content_url"]
+    requests = _place_figure_requests(insert_index, uri, caption, width_pt, height_pt)
+    service.documents().batchUpdate(documentId=doc_id, body={"requests": requests}).execute()
+    return {
+        "status": "placed",
+        "after_body_index": sel["body_index"],
+        "caption": caption,
         "slide_id": slide_id,
     }
 
@@ -2690,6 +2752,34 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Thumbnail size. Default: LARGE.",
     )
 
+    p_place_figure = sub.add_parser(
+        "place-figure",
+        help="Insert a centered figure from a slide, with a caption, after an anchor.",
+    )
+    p_place_figure.add_argument("doc", metavar="DOC_URL")
+    p_place_figure.add_argument(
+        "anchor", metavar="ANCHOR", help="Substring of the paragraph to insert after."
+    )
+    p_place_figure.add_argument("deck", metavar="DECK_URL")
+    p_place_figure.add_argument("slide_id", metavar="SLIDE_ID")
+    p_place_figure.add_argument(
+        "--caption", required=True, help="Caption text placed below the image."
+    )
+    p_place_figure.add_argument("--width-pt", type=float, default=468.0)
+    p_place_figure.add_argument("--height-pt", type=float, default=263.25)
+    p_place_figure.add_argument(
+        "--size", choices=["SMALL", "MEDIUM", "LARGE"], default="LARGE",
+        help="Thumbnail size. Default: LARGE.",
+    )
+    p_place_figure.add_argument(
+        "--allow-multiple", action="store_true",
+        help="Insert after the first match even if the anchor is not unique.",
+    )
+    p_place_figure.add_argument(
+        "--occurrence", type=int, default=None,
+        help="Insert after the Nth matching paragraph (1-based).",
+    )
+
     sub.add_parser("clear", help="Delete the Ploma Vermella Review section.").add_argument(
         "doc", metavar="DOC_URL"
     )
@@ -2992,6 +3082,12 @@ def main() -> None:
         )
     elif args.command == "replace-image":
         result = replace_image(args.doc, args.caption, args.deck, args.slide_id, size=args.size)
+    elif args.command == "place-figure":
+        result = place_figure(
+            args.doc, args.anchor, args.deck, args.slide_id, args.caption,
+            width_pt=args.width_pt, height_pt=args.height_pt, size=args.size,
+            allow_multiple=args.allow_multiple, occurrence=args.occurrence,
+        )
     elif args.command == "clear":
         result = clear_review_section(args.doc)
     elif args.command == "append":

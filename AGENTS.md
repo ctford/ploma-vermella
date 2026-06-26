@@ -60,6 +60,7 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
 .venv/bin/pv replace-block <doc-url> <start> <end> ... # replace one body-element block
 .venv/bin/pv insert-image <doc-url> <body-index> ...   # insert an inline image
 .venv/bin/pv replace-image <doc-url> <caption> <deck-url> <slide-id>  # re-export a figure from a slide thumbnail
+.venv/bin/pv place-figure <doc-url> <anchor> <deck-url> <slide-id> --caption ...  # insert a centered figure + caption after an anchor
 .venv/bin/pv note <doc-url> <quoted-text> <comment>    # append to the review section
 .venv/bin/pv clear <doc-url>                           # remove the review section
 .venv/bin/pv mv <doc-url> <folder-url>                 # move a doc into a folder

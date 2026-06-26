@@ -50,6 +50,7 @@ from pv import (
     _parse_append_blocks,
     _parse_hex_color,
     _parse_table_row,
+    _place_figure_requests,
     _plan_edit_matches,
     _preceding_image_id,
     _replace_image_plan,
@@ -1113,3 +1114,28 @@ def test_build_parser_replace_image():
     )
     assert a.command == "replace-image"
     assert a.caption == "Figure 1-1." and a.slide_id == "g123" and a.size == "MEDIUM"
+
+
+# ---------------------------------------------------------------------------
+# pv place-figure
+# ---------------------------------------------------------------------------
+def test_place_figure_requests_builds_centered_image_and_caption():
+    reqs = _place_figure_requests(100, "https://img", "Figure 2-1. A caption.", 300.0, 200.0)
+    assert reqs[0]["insertText"]["location"]["index"] == 100
+    assert reqs[0]["insertText"]["text"] == "\n\n\nFigure 2-1. A caption.\n"
+    assert reqs[1]["insertInlineImage"]["location"]["index"] == 102
+    assert reqs[1]["insertInlineImage"]["uri"] == "https://img"
+    size = reqs[1]["insertInlineImage"]["objectSize"]
+    assert size["width"]["magnitude"] == 300.0
+    assert size["height"]["unit"] == "PT"
+    style = reqs[2]["updateParagraphStyle"]
+    assert style["paragraphStyle"]["alignment"] == "CENTER"
+    assert style["range"] == {"startIndex": 102, "endIndex": 103}
+
+
+def test_build_parser_place_figure():
+    a = _build_parser().parse_args(
+        ["place-figure", "DOC", "anchor", "DECK", "g1", "--caption", "Figure 2-1."]
+    )
+    assert a.command == "place-figure"
+    assert a.caption == "Figure 2-1." and a.slide_id == "g1"
