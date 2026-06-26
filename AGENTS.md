@@ -71,6 +71,7 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
 .venv/bin/pv outline <doc-url> [--full]                # structural map: headings + images (indices, object IDs)
 .venv/bin/pv insert-after <doc-url> <anchor> <text>    # insert paragraph(s) after an anchor paragraph
 .venv/bin/pv link <doc-url> <text> <url> [--all]       # hyperlink a span of text
+.venv/bin/pv cite <doc-url> <title> <url> [--all]      # italicize + hyperlink a work title (book citation)
 .venv/bin/pv style <doc-url> <text> [--italic|--bold|--underline|--color HEX] [--all]  # character styling
 .venv/bin/pv heading <doc-url> <anchor> <level>        # set a paragraph's style (1-6, normal, title) by anchor
 .venv/bin/pv bullets <doc-url> <start> [end] [--ordered]  # make a paragraph range a bulleted/numbered list

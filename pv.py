@@ -562,6 +562,36 @@ def _link_plan(
     return {"kind": "ok", "requests": requests, "spans": spans}
 
 
+def _cite_plan(
+    doc: dict, title: str, url: str, all_occurrences: bool = False,
+    occurrence: int | None = None,
+) -> dict:
+    """Build requests that both italicize and hyperlink occurrences of `title`.
+
+    The book-citation pattern (italic title linked to its source) in one step.
+    Returns {"kind": "ok", "requests": [...], "spans": [...]} or an ambiguous result.
+    """
+    matches = _find_matches(doc, title)
+    sel = _select_matches(
+        matches, all_occurrences, occurrence, text=title,
+        resolution_example="pv cite <doc> <title> <url> --occurrence 2",
+        fuzzy_options=_fuzzy_for_doc(doc, title) if not matches else None,
+    )
+    if sel["kind"] == "ambiguous":
+        return sel
+    targets = sel["targets"]
+    requests = [
+        {"updateTextStyle": {
+            "range": {"startIndex": m["start_index"], "endIndex": m["end_index"]},
+            "textStyle": {"italic": True, "link": {"url": url}},
+            "fields": "italic,link",
+        }}
+        for m in targets
+    ]
+    spans = [{"start_index": m["start_index"], "end_index": m["end_index"]} for m in targets]
+    return {"kind": "ok", "requests": requests, "spans": spans}
+
+
 _LEVEL_TO_STYLE = {
     "0": "NORMAL_TEXT", "normal": "NORMAL_TEXT", "body": "NORMAL_TEXT",
     "1": "HEADING_1", "2": "HEADING_2", "3": "HEADING_3",
@@ -2072,6 +2102,30 @@ def link_text(
     }
 
 
+def cite_text(
+    doc_id_or_url: str, title: str, url: str, all_occurrences: bool = False,
+    occurrence: int | None = None,
+) -> dict:
+    """
+    Italicize and hyperlink a work title in one step — the book-citation pattern.
+    Requires a single match unless all_occurrences is set or occurrence=N is given;
+    otherwise returns an 'ambiguous' result.
+    """
+    doc_id = _extract_doc_id(doc_id_or_url)
+    service = _docs_service()
+    doc = service.documents().get(documentId=doc_id).execute()
+    plan = _cite_plan(doc, title, url, all_occurrences=all_occurrences, occurrence=occurrence)
+    if plan["kind"] == "ambiguous":
+        return plan["result"]
+    service.documents().batchUpdate(
+        documentId=doc_id, body={"requests": plan["requests"]}
+    ).execute()
+    return {
+        "status": "cited", "title": title, "url": url,
+        "occurrences": len(plan["spans"]), "spans": plan["spans"],
+    }
+
+
 def set_heading(
     doc_id_or_url: str, anchor: str, level: str, allow_multiple: bool = False,
     occurrence: int | None = None,
@@ -2998,6 +3052,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Style the Nth match (1-based) when TEXT matches several places.",
     )
 
+    p_cite = sub.add_parser(
+        "cite",
+        help="Italicize and hyperlink a work title (book citation) in one step.",
+    )
+    p_cite.add_argument("doc", metavar="DOC_URL")
+    p_cite.add_argument("title", metavar="TITLE", help="Exact title span to italicize and link.")
+    p_cite.add_argument("url", metavar="URL")
+    p_cite.add_argument(
+        "--all", action="store_true", dest="all_occurrences",
+        help="Cite every occurrence. Default: require exactly one match.",
+    )
+    p_cite.add_argument(
+        "--occurrence", type=int, default=None,
+        help="Cite the Nth match (1-based) when TITLE appears several times.",
+    )
+
     p_heading = sub.add_parser(
         "heading",
         help="Set a paragraph's style (heading level, normal, title) by anchor.",
@@ -3146,6 +3216,11 @@ def main() -> None:
             args.doc, args.text,
             italic=args.italic, bold=args.bold, underline=args.underline,
             color=args.color, all_occurrences=args.all_occurrences, occurrence=args.occurrence,
+        )
+    elif args.command == "cite":
+        result = cite_text(
+            args.doc, args.title, args.url,
+            all_occurrences=args.all_occurrences, occurrence=args.occurrence,
         )
     elif args.command == "heading":
         result = set_heading(

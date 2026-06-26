@@ -15,6 +15,7 @@ from pv import (
     _build_parser,
     _bullets_plan,
     _chapter_filename,
+    _cite_plan,
     _cover_page_xhtml,
     _default_epub_output_path,
     _default_epub_title,
@@ -1139,3 +1140,35 @@ def test_build_parser_place_figure():
     )
     assert a.command == "place-figure"
     assert a.caption == "Figure 2-1." and a.slide_id == "g1"
+
+
+# ---------------------------------------------------------------------------
+# pv cite
+# ---------------------------------------------------------------------------
+def test_cite_plan_applies_italic_and_link():
+    doc = {"body": {"content": [_ol_para("See The Coal Question now.\n", "NORMAL_TEXT", 1, 28)]}}
+    plan = _cite_plan(doc, "The Coal Question", "https://oreilly/x")
+    assert plan["kind"] == "ok"
+    req = plan["requests"][0]["updateTextStyle"]
+    assert req["textStyle"]["italic"] is True
+    assert req["textStyle"]["link"]["url"] == "https://oreilly/x"
+    assert req["fields"] == "italic,link"
+
+
+def test_cite_plan_ambiguous_when_title_repeats():
+    doc = {"body": {"content": [_ol_para("Cloud FinOps vs Cloud FinOps.\n", "NORMAL_TEXT", 1, 31)]}}
+    plan = _cite_plan(doc, "Cloud FinOps", "https://x")
+    assert plan["kind"] == "ambiguous"
+    assert plan["result"]["reason"] == "multiple_matches"
+
+
+def test_cite_plan_occurrence_selects_one():
+    doc = {"body": {"content": [_ol_para("Cloud FinOps vs Cloud FinOps.\n", "NORMAL_TEXT", 1, 31)]}}
+    plan = _cite_plan(doc, "Cloud FinOps", "https://x", occurrence=2)
+    assert plan["kind"] == "ok"
+    assert len(plan["requests"]) == 1
+
+
+def test_build_parser_cite():
+    a = _build_parser().parse_args(["cite", "DOC", "Title", "URL", "--occurrence", "2"])
+    assert a.command == "cite" and a.occurrence == 2
