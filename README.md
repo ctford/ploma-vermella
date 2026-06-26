@@ -54,11 +54,19 @@ pv slides-thumb <presentation-url> <page-id> # get a slide thumbnail URL
 pv sheet-fetch <sheet-url> --range ...      # read sheet rows by range
 pv sheet-update <sheet-url> <range> ...     # write sheet rows from JSON
 pv figure-map <doc-url>                     # inspect image neighborhoods in a doc
+pv outline <doc-url> [--full]               # structural map: headings + images, with indices
 pv replace-block <doc-url> <start> <end> ... # replace one body-element block safely
+pv replace-section <doc-url> <heading> <text> # replace a heading's body up to the next heading
 pv insert-image <doc-url> <body-index> ...  # restore an inline image at a body index
+pv replace-image <doc-url> <caption> <deck-url> <slide-id>  # re-export a figure from a slide thumbnail
+pv place-figure <doc-url> <anchor> <deck-url> <slide-id> --caption ...  # insert a centered figure + caption
 pv find <doc-url> <text>                    # locate text: indices, paragraph style, is_code, context
 pv insert-after <doc-url> <anchor> <text>   # insert paragraph(s) after an anchor paragraph
+pv insert-before <doc-url> <anchor> <text>  # insert paragraph(s) before an anchor paragraph
 pv link <doc-url> <text> <url>              # hyperlink a span of text
+pv cite <doc-url> <title> <url>             # italicize + hyperlink a work title (citation)
+pv heading <doc-url> <anchor> <level>       # set a paragraph's style (1-6, normal, title)
+pv bullets <doc-url> <start> [end]          # make a paragraph range a bulleted/numbered list
 pv build-epub <doc-url> <doc-url> ...       # build an EPUB (figures preserved) into dist/ with a date suffix
 #
 # Run `pv -h` or `pv <command> -h` for the full command list.
