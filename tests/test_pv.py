@@ -56,6 +56,7 @@ from pv import (
     _plan_edit_matches,
     _preceding_image_id,
     _replace_image_plan,
+    _replace_section_plan,
     _review_copy_title,
     _shape_text,
     _slugify,
@@ -1204,3 +1205,45 @@ def test_insert_before_plan_ambiguous_anchor():
 def test_build_parser_insert_before():
     a = _build_parser().parse_args(["insert-before", "DOC", "anchor", "text", "--occurrence", "3"])
     assert a.command == "insert-before" and a.occurrence == 3
+
+
+# ---------------------------------------------------------------------------
+# pv replace-section
+# ---------------------------------------------------------------------------
+SECTION_DOC = {"body": {"content": [
+    _ol_para("Title\n", "TITLE", 1, 7),
+    _ol_para("Alpha\n", "HEADING_1", 7, 13),
+    _ol_para("Old alpha body.\n", "NORMAL_TEXT", 13, 29),
+    _ol_para("More old.\n", "NORMAL_TEXT", 29, 39),
+    _ol_para("Sub\n", "HEADING_2", 39, 43),
+    _ol_para("Sub body.\n", "NORMAL_TEXT", 43, 53),
+    _ol_para("Beta\n", "HEADING_1", 53, 58),
+    _ol_para("Beta body.\n", "NORMAL_TEXT", 58, 69),
+]}}
+
+
+def test_replace_section_plan_spans_to_next_same_level_heading():
+    plan = _replace_section_plan(SECTION_DOC, "Alpha", "New body.")
+    assert plan["kind"] == "ok"
+    assert plan["section_start"] == 13   # after the Alpha heading
+    assert plan["section_end"] == 53     # start of Beta — includes the H2 subsection
+    assert plan["insert_text"] == "New body.\n\n"
+
+
+def test_replace_section_plan_last_section_preserves_final_newline():
+    plan = _replace_section_plan(SECTION_DOC, "Beta", "New beta.")
+    assert plan["kind"] == "ok"
+    assert plan["section_start"] == 58
+    assert plan["section_end"] == 68     # last endIndex (69) minus the final newline
+    assert plan["insert_text"] == "New beta."
+
+
+def test_replace_section_plan_only_matches_headings():
+    plan = _replace_section_plan(SECTION_DOC, "Old alpha", "x")
+    assert plan["kind"] == "ambiguous"
+    assert plan["result"]["reason"] == "no_match"
+
+
+def test_build_parser_replace_section():
+    a = _build_parser().parse_args(["replace-section", "DOC", "Alpha", "new text"])
+    assert a.command == "replace-section" and a.heading == "Alpha"

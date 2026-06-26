@@ -67,6 +67,7 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
 .venv/bin/pv cp <doc-url> <folder-url> [--name NAME]   # copy a doc into a folder
 .venv/bin/pv review-copy <doc-url> <folder-url>        # copy with dated title, clear review section
 .venv/bin/pv edit <doc-url> <old> <new> [--all]        # replace text in the doc body
+.venv/bin/pv replace-section <doc-url> <heading> <text>  # replace a heading's body up to the next heading
 .venv/bin/pv find <doc-url> <text>                     # locate text: indices, style, is_code, context
 .venv/bin/pv outline <doc-url> [--full]                # structural map: headings + images (indices, object IDs)
 .venv/bin/pv insert-after <doc-url> <anchor> <text>    # insert paragraph(s) after an anchor paragraph

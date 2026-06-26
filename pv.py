@@ -844,6 +844,80 @@ def _place_figure_requests(
     ]
 
 
+_HEADING_RANK = {
+    "TITLE": 0, "HEADING_1": 1, "HEADING_2": 2,
+    "HEADING_3": 3, "HEADING_4": 4, "HEADING_5": 5, "HEADING_6": 6,
+}
+
+
+def _heading_rank(style: str) -> int:
+    """Lower rank = higher-level heading (TITLE=0). Non-headings sort last."""
+    return _HEADING_RANK.get(style, 99)
+
+
+def _replace_section_plan(doc: dict, heading_anchor: str, text: str) -> dict:
+    """Plan replacing a heading's body — from after the heading to the next heading
+    of the same or higher level (or end of document).
+
+    Returns {"kind": "ok", "heading_body_index", "section_start", "section_end",
+    "insert_text"} or {"kind": "ambiguous", "result": <ambiguous payload>}.
+    """
+    if not heading_anchor:
+        raise ValueError("heading anchor must not be empty")
+    content = doc.get("body", {}).get("content", [])
+    nanchor = _normalize_quotes(heading_anchor)
+    hits = [
+        (i, el) for i, el in enumerate(content)
+        if el.get("paragraph")
+        and el["paragraph"].get("paragraphStyle", {}).get("namedStyleType", "") in _HEADING_STYLES
+        and nanchor in _normalize_quotes(_paragraph_text(el))
+    ]
+    if not hits:
+        return {"kind": "ambiguous", "result": _ambiguous(
+            "no_match",
+            f"no heading matches {heading_anchor!r}; it may have changed since the doc was read.",
+            options=_fuzzy_for_doc(doc, heading_anchor),
+            resolution={
+                "how": "re_call_with", "field": "heading",
+                "hint": "anchor on the current text of a heading paragraph",
+            },
+        )}
+    if len(hits) > 1:
+        options = [
+            {"id": n, "body_index": i, "context": _paragraph_text(el).strip()[:120]}
+            for n, (i, el) in enumerate(hits, 1)
+        ]
+        return {"kind": "ambiguous", "result": _ambiguous(
+            "multiple_matches",
+            f"{len(hits)} headings match {heading_anchor!r}; PV will not choose which.",
+            question="Which heading did you mean?",
+            options=options,
+            resolution={"how": "re_call_with", "field": "heading"},
+        )}
+    hi, hel = hits[0]
+    rank = _heading_rank(hel["paragraph"].get("paragraphStyle", {}).get("namedStyleType", ""))
+    section_start = hel["endIndex"]
+    section_end = None
+    for j in range(hi + 1, len(content)):
+        p = content[j].get("paragraph")
+        if not p:
+            continue
+        style = p.get("paragraphStyle", {}).get("namedStyleType", "")
+        if style in _HEADING_STYLES and _heading_rank(style) <= rank:
+            section_end = content[j]["startIndex"]
+            break
+    at_end = section_end is None
+    if at_end:
+        section_end = content[-1]["endIndex"] - 1  # preserve the document's final newline
+    section_end = max(section_end, section_start)
+    insert_text = text if at_end else text + "\n\n"
+    return {
+        "kind": "ok", "heading_body_index": hi,
+        "section_start": section_start, "section_end": section_end,
+        "insert_text": insert_text,
+    }
+
+
 def _is_table_separator(line: str, columns: int) -> bool:
     """Return True if line looks like a markdown table separator row."""
     try:
@@ -1679,6 +1753,36 @@ def place_figure(
         "after_body_index": sel["body_index"],
         "caption": caption,
         "slide_id": slide_id,
+    }
+
+
+def replace_section(doc_id_or_url: str, heading_anchor: str, text: str) -> dict:
+    """
+    Replace a section's body: everything from after the heading matching
+    `heading_anchor` to the next heading of the same or higher level (or end of
+    document) is replaced with `text`. The heading itself is kept. Returns an
+    'ambiguous' result when no heading matches, or several do.
+    """
+    doc_id = _extract_doc_id(doc_id_or_url)
+    service = _docs_service()
+    doc = service.documents().get(documentId=doc_id).execute()
+    plan = _replace_section_plan(doc, heading_anchor, text)
+    if plan["kind"] == "ambiguous":
+        return plan["result"]
+    requests = []
+    if plan["section_end"] > plan["section_start"]:
+        requests.append({"deleteContentRange": {"range": {
+            "startIndex": plan["section_start"], "endIndex": plan["section_end"],
+        }}})
+    requests.append({"insertText": {
+        "location": {"index": plan["section_start"]}, "text": plan["insert_text"],
+    }})
+    service.documents().batchUpdate(documentId=doc_id, body={"requests": requests}).execute()
+    return {
+        "status": "replaced",
+        "heading_body_index": plan["heading_body_index"],
+        "heading": heading_anchor,
+        "chars": len(text),
     }
 
 
@@ -2888,6 +2992,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Insert after the Nth matching paragraph (1-based).",
     )
 
+    p_replace_section = sub.add_parser(
+        "replace-section",
+        help="Replace a heading's body up to the next same-or-higher heading.",
+    )
+    p_replace_section.add_argument("doc", metavar="DOC_URL")
+    p_replace_section.add_argument(
+        "heading", metavar="HEADING", help="Substring of the section's heading paragraph."
+    )
+    p_replace_section.add_argument(
+        "text", metavar="TEXT", help="Replacement body; use blank lines for paragraphs."
+    )
+
     sub.add_parser("clear", help="Delete the Ploma Vermella Review section.").add_argument(
         "doc", metavar="DOC_URL"
     )
@@ -3232,6 +3348,8 @@ def main() -> None:
             width_pt=args.width_pt, height_pt=args.height_pt, size=args.size,
             allow_multiple=args.allow_multiple, occurrence=args.occurrence,
         )
+    elif args.command == "replace-section":
+        result = replace_section(args.doc, args.heading, args.text)
     elif args.command == "clear":
         result = clear_review_section(args.doc)
     elif args.command == "append":
