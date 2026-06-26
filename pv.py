@@ -196,6 +196,53 @@ def _figure_map_from_doc(doc: dict) -> list[dict]:
     return figures
 
 
+def _outline_from_doc(doc: dict, full: bool = False) -> list[dict]:
+    """Structural map of a document's body.
+
+    By default returns navigational landmarks — headings (TITLE/HEADING_*) and
+    inline images (with their object IDs) — each with its body element ordinal and
+    document start/end indices, so other tooling can anchor on it. With full=True,
+    returns every body paragraph (flagging bullets) and table as well.
+    """
+    content = doc.get("body", {}).get("content", [])
+    items: list[dict] = []
+    for index, el in enumerate(content):
+        if "table" in el:
+            if full:
+                items.append({
+                    "body_index": index,
+                    "start_index": el.get("startIndex"),
+                    "end_index": el.get("endIndex"),
+                    "kind": "table",
+                })
+            continue
+        paragraph = el.get("paragraph")
+        if paragraph is None:
+            continue  # section breaks and other non-paragraph elements
+        style = paragraph.get("paragraphStyle", {}).get("namedStyleType", "NORMAL_TEXT")
+        is_image = _is_image_paragraph(el)
+        is_heading = style in _HEADING_STYLES
+        if not full and not (is_heading or is_image):
+            continue
+        item = {
+            "body_index": index,
+            "start_index": el.get("startIndex"),
+            "end_index": el.get("endIndex"),
+            "style": style,
+        }
+        if is_image:
+            ids = _inline_object_ids(el)
+            item["kind"] = "image"
+            item["inline_object_id"] = ids[0] if ids else None
+        else:
+            item["kind"] = "heading" if is_heading else "paragraph"
+            if "bullet" in paragraph:
+                item["bullet"] = True
+        item["text"] = _paragraph_text(el).strip()[:120]
+        items.append(item)
+    return items
+
+
 # Font families treated as code/monospace, so safe-edit tooling can skip them.
 _MONOSPACE_FONTS = frozenset({
     "Courier New", "Consolas", "Roboto Mono", "Source Code Pro", "Inconsolata",
@@ -1664,6 +1711,15 @@ def find_text(doc_id_or_url: str, text: str) -> dict:
     return {"query": text, "match_count": len(matches), "matches": matches}
 
 
+def outline_document(doc_id_or_url: str, full: bool = False) -> dict:
+    """Map a doc's structure: headings and images (with indices and inline-object
+    IDs) by default, or every body element with full=True."""
+    doc_id = _extract_doc_id(doc_id_or_url)
+    doc = _docs_service().documents().get(documentId=doc_id).execute()
+    items = _outline_from_doc(doc, full=full)
+    return {"item_count": len(items), "items": items}
+
+
 def insert_after(
     doc_id_or_url: str, anchor: str, text: str, allow_multiple: bool = False,
     occurrence: int | None = None,
@@ -2475,6 +2531,17 @@ def _build_parser() -> argparse.ArgumentParser:
     p_find.add_argument("doc", metavar="DOC_URL")
     p_find.add_argument("text", metavar="TEXT", help="Exact substring to locate.")
 
+    p_outline = sub.add_parser(
+        "outline",
+        help="Map a doc's structure: headings and images by default, every paragraph with --full.",
+    )
+    p_outline.add_argument("doc", metavar="DOC_URL")
+    p_outline.add_argument(
+        "--full",
+        action="store_true",
+        help="Include every body paragraph and table, not just headings and images.",
+    )
+
     p_insert_after = sub.add_parser(
         "insert-after",
         help="Insert text as new paragraph(s) after the paragraph containing an anchor.",
@@ -2619,6 +2686,8 @@ def main() -> None:
         )
     elif args.command == "find":
         result = find_text(args.doc, args.text)
+    elif args.command == "outline":
+        result = outline_document(args.doc, full=args.full)
     elif args.command == "insert-after":
         result = insert_after(
             args.doc, args.anchor, args.text,

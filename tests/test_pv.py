@@ -41,6 +41,7 @@ from pv import (
     _map_comments,
     _media_extension,
     _normalize_quotes,
+    _outline_from_doc,
     _paragraph_location,
     _paragraph_text,
     _parse_append_blocks,
@@ -907,3 +908,64 @@ def test_downscale_image_passes_through_non_image():
     out, mt = _downscale_image(b"not an image", "image/png", 1600)
     assert out == b"not an image"
     assert mt == "image/png"
+
+
+# ---------------------------------------------------------------------------
+# _outline_from_doc / pv outline
+# ---------------------------------------------------------------------------
+def _ol_para(text, style="NORMAL_TEXT", start=0, end=0, bullet=False, image_id=None):
+    if image_id is not None:
+        elements = [{"inlineObjectElement": {"inlineObjectId": image_id}}]
+    else:
+        elements = [{"textRun": {"content": text}}]
+    paragraph = {"elements": elements, "paragraphStyle": {"namedStyleType": style}}
+    if bullet:
+        paragraph["bullet"] = {"listId": "L1"}
+    return {"startIndex": start, "endIndex": end, "paragraph": paragraph}
+
+
+OUTLINE_DOC = {"body": {"content": [
+    {"startIndex": 0, "endIndex": 1, "sectionBreak": {}},
+    _ol_para("My Title\n", "TITLE", 1, 10),
+    _ol_para("Intro paragraph.\n", "NORMAL_TEXT", 10, 27),
+    _ol_para("Section One\n", "HEADING_1", 27, 39),
+    _ol_para("Body text.\n", "NORMAL_TEXT", 39, 50),
+    _ol_para("\n", "NORMAL_TEXT", 50, 52, image_id="kix.abc"),
+    _ol_para("Figure 1-1. A caption.\n", "NORMAL_TEXT", 52, 75),
+    _ol_para("A bullet item.\n", "NORMAL_TEXT", 75, 90, bullet=True),
+]}}
+
+
+def test_outline_default_returns_headings_and_images_only():
+    items = _outline_from_doc(OUTLINE_DOC)
+    kinds = {(it["kind"], it.get("style")) for it in items}
+    assert ("heading", "TITLE") in kinds
+    assert ("heading", "HEADING_1") in kinds
+    assert any(it["kind"] == "image" for it in items)
+    assert all(it["kind"] != "paragraph" for it in items)
+
+
+def test_outline_image_exposes_inline_object_id_and_index():
+    img = next(it for it in _outline_from_doc(OUTLINE_DOC) if it["kind"] == "image")
+    assert img["inline_object_id"] == "kix.abc"
+    assert img["body_index"] == 5
+    assert img["start_index"] == 50
+
+
+def test_outline_full_includes_paragraphs_and_flags_bullets():
+    items = _outline_from_doc(OUTLINE_DOC, full=True)
+    assert any(it["kind"] == "paragraph" for it in items)
+    bullet = next(it for it in items if it.get("bullet"))
+    assert bullet["text"] == "A bullet item."
+    assert all("start_index" in it for it in items)
+
+
+def test_outline_full_skips_section_breaks():
+    items = _outline_from_doc(OUTLINE_DOC, full=True)
+    assert min(it["body_index"] for it in items) == 1
+
+
+def test_build_parser_outline_full_flag():
+    args = _build_parser().parse_args(["outline", "DOC", "--full"])
+    assert args.command == "outline"
+    assert args.full is True
