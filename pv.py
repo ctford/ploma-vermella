@@ -2867,7 +2867,7 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Ploma Vermella — Google Docs review tool.",
     )
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
-    sub.required = True
+    sub.required = False  # bare `pv` prints help (handled in main) instead of erroring
 
     sub.add_parser("list", help="List all Google Docs in a Drive folder.").add_argument(
         "folder", metavar="FOLDER_URL"
@@ -3306,6 +3306,10 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        return
 
     if args.command == "list":
         result = list_folder(args.folder)

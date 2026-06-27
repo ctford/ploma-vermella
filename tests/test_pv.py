@@ -1247,3 +1247,9 @@ def test_replace_section_plan_only_matches_headings():
 def test_build_parser_replace_section():
     a = _build_parser().parse_args(["replace-section", "DOC", "Alpha", "new text"])
     assert a.command == "replace-section" and a.heading == "Alpha"
+
+
+def test_build_parser_no_command_allowed():
+    # Bare `pv` must parse (command None) so main() can print help, not error out.
+    args = _build_parser().parse_args([])
+    assert args.command is None
