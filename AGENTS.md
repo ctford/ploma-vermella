@@ -90,6 +90,14 @@ All commands output JSON. Use `.venv/bin/pv -h` or `.venv/bin/pv <command> -h` f
 Text matching (`edit`, `find`, `link`, `style`, `insert-after`) is **quote-agnostic**: curly and
 straight quotes/apostrophes match interchangeably, so you don't have to reproduce smart quotes exactly.
 
+**Extend `pv` when the work turns manual.** If a task has you repeatedly dropping to the raw
+Docs/Slides/Sheets API (ad-hoc `pv._docs_service()` Python) or hand-running the same multi-step edit,
+treat that as a signal that `pv` is missing a primitive — each manual workaround is a command that
+should exist. Prefer adding or updating a `pv` command (a pure, testable plan function plus a thin
+wrapper, following the one-change-at-a-time discipline above, and documented here and in `README.md`)
+over accumulating one-off scripts. Extend the existing text-anchor + structured "ambiguous result"
+model (see `edit`, `outline`, `heading`, `replace-section`) rather than inventing a new shape.
+
 ## Review Workflow
 
 When asked to review a chapter:
