@@ -66,7 +66,7 @@ pv insert-before <doc-url> <anchor> <text>  # insert paragraph(s) before an anch
 pv link <doc-url> <text> <url>              # hyperlink a span of text
 pv cite <doc-url> <title> <url>             # italicize + hyperlink a work title (citation)
 pv heading <doc-url> <anchor> <level>       # set a paragraph's style (1-6, normal, title)
-pv bullets <doc-url> <start> [end]          # make a paragraph range a bulleted/numbered list
+pv bullets <doc-url> <start> [end] [--remove]  # make a paragraph range a bulleted/numbered list (or strip bullets)
 pv build-epub <doc-url> <doc-url> ...       # build an EPUB (figures preserved) into dist/ with a date suffix
 #
 # Run `pv -h` or `pv <command> -h` for the full command list.
