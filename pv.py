@@ -514,28 +514,29 @@ def _parse_hex_color(hex_color: str) -> dict:
 def _style_plan(
     doc: dict,
     text: str,
-    italic: bool = False,
-    bold: bool = False,
-    underline: bool = False,
+    italic: bool | None = None,
+    bold: bool | None = None,
+    underline: bool | None = None,
     color: str | None = None,
     all_occurrences: bool = False,
     occurrence: int | None = None,
 ) -> dict:
     """Build updateTextStyle requests applying character styles to `text`.
 
-    Returns {"kind": "ok", "requests": [...], "spans": [...]} or
-    {"kind": "ambiguous", "result": <ambiguous payload>}.
+    Each of italic/bold/underline is tri-state: None leaves it untouched, True
+    turns it on, False turns it off. Returns {"kind": "ok", "requests": [...],
+    "spans": [...]} or {"kind": "ambiguous", "result": <ambiguous payload>}.
     """
     style: dict = {}
     fields: list[str] = []
-    if italic:
-        style["italic"] = True
+    if italic is not None:
+        style["italic"] = italic
         fields.append("italic")
-    if bold:
-        style["bold"] = True
+    if bold is not None:
+        style["bold"] = bold
         fields.append("bold")
-    if underline:
-        style["underline"] = True
+    if underline is not None:
+        style["underline"] = underline
         fields.append("underline")
     if color:
         style["foregroundColor"] = {"color": {"rgbColor": _parse_hex_color(color)}}
@@ -2340,9 +2341,9 @@ def set_bullets(
 def style_text(
     doc_id_or_url: str,
     text: str,
-    italic: bool = False,
-    bold: bool = False,
-    underline: bool = False,
+    italic: bool | None = None,
+    bold: bool | None = None,
+    underline: bool | None = None,
     color: str | None = None,
     all_occurrences: bool = False,
     occurrence: int | None = None,
@@ -3223,6 +3224,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_style.add_argument("--italic", action="store_true")
     p_style.add_argument("--bold", action="store_true")
     p_style.add_argument("--underline", action="store_true")
+    p_style.add_argument("--no-italic", action="store_true", help="Turn italic off.")
+    p_style.add_argument("--no-bold", action="store_true", help="Turn bold off.")
+    p_style.add_argument("--no-underline", action="store_true", help="Turn underline off.")
     p_style.add_argument("--color", metavar="HEX", help="Foreground color, e.g. #d3002d.")
     p_style.add_argument(
         "--all",
@@ -3408,9 +3412,12 @@ def main() -> None:
             all_occurrences=args.all_occurrences, occurrence=args.occurrence,
         )
     elif args.command == "style":
+        tri = lambda on, off: True if on else (False if off else None)  # noqa: E731
         result = style_text(
             args.doc, args.text,
-            italic=args.italic, bold=args.bold, underline=args.underline,
+            italic=tri(args.italic, args.no_italic),
+            bold=tri(args.bold, args.no_bold),
+            underline=tri(args.underline, args.no_underline),
             color=args.color, all_occurrences=args.all_occurrences, occurrence=args.occurrence,
         )
     elif args.command == "cite":

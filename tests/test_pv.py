@@ -882,6 +882,14 @@ def test_style_plan_requires_a_style():
     with pytest.raises(ValueError):
         _style_plan(_fake_doc(_para(1, "text\n")), "text")
 
+def test_style_plan_can_turn_a_style_off():
+    doc = _fake_doc(_para(1, "Term\n"))
+    plan = _style_plan(doc, "Term", bold=False)
+    assert plan["kind"] == "ok"
+    style = plan["requests"][0]["updateTextStyle"]
+    assert style["textStyle"] == {"bold": False}
+    assert style["fields"] == "bold"
+
 def test_style_plan_missing_text_is_ambiguous():
     plan = _style_plan(_fake_doc(_para(1, "hello\n")), "zzz", italic=True)
     assert plan["kind"] == "ambiguous"
