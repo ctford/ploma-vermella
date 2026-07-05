@@ -90,6 +90,10 @@ All commands output JSON. Use `.venv/bin/pv -h` or `.venv/bin/pv <command> -h` f
 Text matching (`edit`, `find`, `link`, `style`, `insert-after`) is **quote-agnostic**: curly and
 straight quotes/apostrophes match interchangeably, so you don't have to reproduce smart quotes exactly.
 
+`edit` and `find` also match text **inside table cells** (they walk the body in reading order,
+descending into tables). Editing a table cell's text works like any other edit; inserting or
+deleting whole table rows/columns is still out of scope.
+
 **Extend `pv` when the work turns manual.** If a task has you repeatedly dropping to the raw
 Docs/Slides/Sheets API (ad-hoc `pv._docs_service()` Python) or hand-running the same multi-step edit,
 treat that as a signal that `pv` is missing a primitive — each manual workaround is a command that

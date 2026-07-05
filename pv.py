@@ -267,18 +267,30 @@ def _is_code_paragraph(element: dict) -> bool:
     return bool(families) and all(f in _MONOSPACE_FONTS for f in families)
 
 
-def _doc_text_runs(element_source: dict) -> list[tuple[int, str]]:
-    """Return [(doc_start_index, text)] for every text run in the document body."""
+def _content_text_runs(content: list[dict]) -> list[tuple[int, str]]:
+    """Return [(doc_start_index, text)] for every text run in a list of structural
+    elements, descending into table cells in reading order."""
     runs = []
-    for el in element_source.get("body", {}).get("content", []):
+    for el in content:
         paragraph = el.get("paragraph")
-        if not paragraph:
+        if paragraph is not None:
+            for pe in paragraph.get("elements", []):
+                text_run = pe.get("textRun")
+                if text_run is not None:
+                    runs.append((pe["startIndex"], text_run.get("content", "")))
             continue
-        for pe in paragraph.get("elements", []):
-            text_run = pe.get("textRun")
-            if text_run is not None:
-                runs.append((pe["startIndex"], text_run.get("content", "")))
+        table = el.get("table")
+        if table is not None:
+            for row in table.get("tableRows", []):
+                for cell in row.get("tableCells", []):
+                    runs.extend(_content_text_runs(cell.get("content", [])))
     return runs
+
+
+def _doc_text_runs(element_source: dict) -> list[tuple[int, str]]:
+    """Return [(doc_start_index, text)] for every text run in the document body,
+    including text inside table cells (in reading order)."""
+    return _content_text_runs(element_source.get("body", {}).get("content", []))
 
 
 def _doc_index_at(runs: list[tuple[int, str]], flat_pos: int) -> int:
@@ -2112,28 +2124,11 @@ def edit_document(
     service = _docs_service()
     doc = service.documents().get(documentId=doc_id).execute()
 
-    runs = []  # (utf16_start_in_doc, text)
-    for el in doc.get("body", {}).get("content", []):
-        para = el.get("paragraph")
-        if not para:
-            continue
-        for pe in para.get("elements", []):
-            tr = pe.get("textRun")
-            if tr:
-                runs.append((pe["startIndex"], tr.get("content", "")))
-
+    runs = _doc_text_runs(doc)
     flat = "".join(t for _, t in runs)
     # Match quote-agnostically; normalization preserves positions and lengths.
     nflat = _normalize_quotes(flat)
     nold = _normalize_quotes(old)
-
-    def doc_index_at(flat_pos: int) -> int:
-        pos = 0
-        for start, text in runs:
-            if pos + len(text) > flat_pos:
-                return start + (flat_pos - pos)
-            pos += len(text)
-        raise IndexError(f"flat position {flat_pos} out of range")
 
     plan = _plan_edit_matches(flat, nflat, old, nold, all_occurrences, occurrence)
     if plan["kind"] == "ambiguous":
@@ -2142,7 +2137,7 @@ def edit_document(
 
     requests = []
     for flat_pos in sorted(positions, reverse=True):
-        start = doc_index_at(flat_pos)
+        start = _doc_index_at(runs, flat_pos)
         end = start + _utf16_len(old)
         requests.append({"deleteContentRange": {"range": {"startIndex": start, "endIndex": end}}})
         if new:

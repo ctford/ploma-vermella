@@ -738,6 +738,22 @@ def test_doc_index_at_out_of_range_raises():
     with pytest.raises(IndexError):
         _doc_index_at([(1, "ab\n")], 99)
 
+def test_doc_text_runs_descends_into_table_cells():
+    def cell(start, text):
+        return {"content": [_para(start, text)]}
+    doc = _fake_doc(
+        _para(1, "Before.\n"),
+        {"table": {"tableRows": [
+            {"tableCells": [cell(12, "Kiro\n"), cell(20, "Spec-kit\n")]},
+        ]}},
+        _para(40, "After.\n"),
+    )
+    runs = _doc_text_runs(doc)
+    assert runs == [(1, "Before.\n"), (12, "Kiro\n"), (20, "Spec-kit\n"), (40, "After.\n")]
+    # a match inside a table cell resolves to that cell's document index
+    flat = "".join(t for _, t in runs)
+    assert _doc_index_at(runs, flat.index("Spec-kit")) == 20
+
 def test_inline_object_ids_extracts_image_refs():
     para = {"paragraph": {"elements": [
         {"inlineObjectElement": {"inlineObjectId": "kix.a"}},
