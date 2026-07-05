@@ -1076,6 +1076,12 @@ def test_bullets_plan_ordered_uses_numbered_preset():
     preset = plan["request"]["createParagraphBullets"]["bulletPreset"]
     assert preset == "NUMBERED_DECIMAL_ALPHA_ROMAN"
 
+def test_bullets_plan_remove_uses_delete_request():
+    plan = _bullets_plan(STYLE_DOC, "First point", "Third point", remove=True)
+    assert plan["kind"] == "ok"
+    assert "createParagraphBullets" not in plan["request"]
+    assert plan["request"]["deleteParagraphBullets"]["range"] == {"startIndex": 19, "endIndex": 59}
+
 
 def test_bullets_plan_normalizes_reversed_anchors():
     plan = _bullets_plan(STYLE_DOC, "Third point", "First point")

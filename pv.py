@@ -732,9 +732,11 @@ def _heading_plan(
 def _bullets_plan(
     doc: dict, start_anchor: str, end_anchor: str | None = None, ordered: bool = False,
     start_occurrence: int | None = None, end_occurrence: int | None = None,
+    remove: bool = False,
 ) -> dict:
-    """Build the createParagraphBullets request over the paragraphs from
-    `start_anchor` to `end_anchor` (inclusive). Returns an ok or ambiguous result."""
+    """Build the paragraph-bullet request over the paragraphs from `start_anchor`
+    to `end_anchor` (inclusive). Creates bullets, or removes them with remove=True.
+    Returns an ok or ambiguous result."""
     start = _select_anchor(
         doc, start_anchor, start_occurrence, True,
         resolution_example="pv bullets <doc> <start> <end> --start-occurrence 2",
@@ -753,11 +755,13 @@ def _bullets_plan(
     first, last = sorted(
         (start["element"], end["element"]), key=lambda el: el["startIndex"]
     )
-    preset = "NUMBERED_DECIMAL_ALPHA_ROMAN" if ordered else "BULLET_DISC_CIRCLE_SQUARE"
-    request = {"createParagraphBullets": {
-        "range": {"startIndex": first["startIndex"], "endIndex": last["endIndex"]},
-        "bulletPreset": preset,
-    }}
+    rng = {"startIndex": first["startIndex"], "endIndex": last["endIndex"]}
+    if remove:
+        request = {"deleteParagraphBullets": {"range": rng}}
+        preset = None
+    else:
+        preset = "NUMBERED_DECIMAL_ALPHA_ROMAN" if ordered else "BULLET_DISC_CIRCLE_SQUARE"
+        request = {"createParagraphBullets": {"range": rng, "bulletPreset": preset}}
     return {
         "kind": "ok", "request": request, "preset": preset,
         "start_body_index": start["body_index"], "end_body_index": end["body_index"],
@@ -2311,20 +2315,21 @@ def set_heading(
 def set_bullets(
     doc_id_or_url: str, start_anchor: str, end_anchor: str | None = None,
     ordered: bool = False, start_occurrence: int | None = None,
-    end_occurrence: int | None = None,
+    end_occurrence: int | None = None, remove: bool = False,
 ) -> dict:
     """
     Turn the paragraphs from `start_anchor` to `end_anchor` (inclusive) into a
-    bulleted list, or a numbered list with ordered=True. Pass only start_anchor to
-    bullet a single paragraph. Returns an 'ambiguous' result when an anchor is
-    missing or matches several paragraphs (pass start/end_occurrence to pick one).
+    bulleted list, or a numbered list with ordered=True, or strip existing bullets
+    with remove=True. Pass only start_anchor to act on a single paragraph. Returns
+    an 'ambiguous' result when an anchor is missing or matches several paragraphs
+    (pass start/end_occurrence to pick one).
     """
     doc_id = _extract_doc_id(doc_id_or_url)
     service = _docs_service()
     doc = service.documents().get(documentId=doc_id).execute()
     plan = _bullets_plan(
         doc, start_anchor, end_anchor, ordered=ordered,
-        start_occurrence=start_occurrence, end_occurrence=end_occurrence,
+        start_occurrence=start_occurrence, end_occurrence=end_occurrence, remove=remove,
     )
     if plan["kind"] == "ambiguous":
         return plan["result"]
@@ -2332,7 +2337,7 @@ def set_bullets(
         documentId=doc_id, body={"requests": [plan["request"]]}
     ).execute()
     return {
-        "status": "bulleted", "preset": plan["preset"],
+        "status": "unbulleted" if remove else "bulleted", "preset": plan["preset"],
         "start_body_index": plan["start_body_index"],
         "end_body_index": plan["end_body_index"],
     }
@@ -3291,6 +3296,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--ordered", action="store_true", help="Numbered list instead of bullets."
     )
     p_bullets.add_argument(
+        "--remove", action="store_true", help="Strip bullets from the paragraph range."
+    )
+    p_bullets.add_argument(
         "--start-occurrence", type=int, default=None,
         help="Pick the Nth match for START (1-based).",
     )
@@ -3434,6 +3442,7 @@ def main() -> None:
         result = set_bullets(
             args.doc, args.start, args.end, ordered=args.ordered,
             start_occurrence=args.start_occurrence, end_occurrence=args.end_occurrence,
+            remove=args.remove,
         )
     else:
         result = append_review_note(args.doc, args.quoted_text, args.comment)
