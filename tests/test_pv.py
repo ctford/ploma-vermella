@@ -61,6 +61,7 @@ from pv import (
     _shape_text,
     _slugify,
     _style_plan,
+    _suggestions_from_doc,
     _text_from_elements,
     _title_page_xhtml,
     _utf16_len,
@@ -1002,6 +1003,100 @@ def test_build_parser_outline_full_flag():
     args = _build_parser().parse_args(["outline", "DOC", "--full"])
     assert args.command == "outline"
     assert args.full is True
+
+
+# ---------------------------------------------------------------------------
+# _suggestions_from_doc / pv suggestions
+# ---------------------------------------------------------------------------
+
+def _suggested_run(text, insert=None, delete=None):
+    run = {"textRun": {"content": text}}
+    if insert:
+        run["textRun"]["suggestedInsertionIds"] = insert
+    if delete:
+        run["textRun"]["suggestedDeletionIds"] = delete
+    return run
+
+# A title with a suggested "Chapter 7. " insertion, a replacement (delete "or",
+# insert "and"), an unchanged paragraph, and a table cell with a suggested deletion.
+SUGGESTIONS_DOC = {
+    "title": "Chapter 07: Technology Iteration",
+    "body": {
+        "content": [
+            {"sectionBreak": {}},
+            {"paragraph": {"elements": [
+                _suggested_run("Chapter 7. ", insert=["sug.a"]),
+                _suggested_run("Technology Iteration\n"),
+            ]}},
+            {"paragraph": {"elements": [
+                _suggested_run("different"),
+                _suggested_run(" and", insert=["sug.b"]),
+                _suggested_run(", or", delete=["sug.b"]),
+                _suggested_run(" to keep it the same.\n"),
+            ]}},
+            {"paragraph": {"elements": [_suggested_run("Untouched paragraph.\n")]}},
+            {"table": {"tableRows": [{"tableCells": [{"content": [
+                {"paragraph": {"elements": [
+                    _suggested_run("cell before"),
+                    _suggested_run(" extra", delete=["sug.c"]),
+                ]}},
+            ]}]}]}},
+            {"paragraph": {
+                "elements": [_suggested_run("Restyled heading\n")],
+                "suggestedParagraphStyleChanges": {"sug.d": {}},
+            }},
+        ]
+    },
+}
+
+
+def test_suggestions_reports_only_changed_paragraphs():
+    result = _suggestions_from_doc(SUGGESTIONS_DOC)
+    # Untouched paragraph is excluded; the other four carry suggestions.
+    assert result["changed_paragraphs"] == 4
+    assert all("Untouched" not in p["before"] for p in result["paragraphs"])
+
+
+def test_suggestions_before_after_and_marked_for_insertion():
+    title = _suggestions_from_doc(SUGGESTIONS_DOC)["paragraphs"][0]
+    assert title["before"] == "Technology Iteration"
+    assert title["after"] == "Chapter 7. Technology Iteration"
+    assert title["marked"] == "{+Chapter 7. +}Technology Iteration"
+
+
+def test_suggestions_replacement_splits_into_delete_and_insert():
+    para = _suggestions_from_doc(SUGGESTIONS_DOC)["paragraphs"][1]
+    assert para["before"] == "different, or to keep it the same."
+    assert para["after"] == "different and to keep it the same."
+    assert para["marked"] == "different{+ and+}[-, or-] to keep it the same."
+
+
+def test_suggestions_walks_into_table_cells():
+    result = _suggestions_from_doc(SUGGESTIONS_DOC)
+    cell = next(p for p in result["paragraphs"] if p["before"].startswith("cell before"))
+    assert cell["after"] == "cell before"
+    assert cell["marked"] == "cell before[- extra-]"
+
+
+def test_suggestions_counts_and_style_changes():
+    result = _suggestions_from_doc(SUGGESTIONS_DOC)
+    assert result["insertion_count"] == 2  # sug.a, sug.b
+    assert result["deletion_count"] == 2   # sug.b, sug.c
+    assert result["paragraph_style_change_count"] == 1  # sug.d
+    styled = next(p for p in result["paragraphs"] if p["style_change"])
+    assert styled["style_change"] == ["sug.d"]
+
+
+def test_suggestions_empty_doc_has_no_paragraphs():
+    result = _suggestions_from_doc({})
+    assert result["changed_paragraphs"] == 0
+    assert result["paragraphs"] == []
+
+
+def test_build_parser_suggestions():
+    args = _build_parser().parse_args(["suggestions", "DOC"])
+    assert args.command == "suggestions"
+    assert args.doc == "DOC"
 
 
 # ---------------------------------------------------------------------------

@@ -243,6 +243,84 @@ def _outline_from_doc(doc: dict, full: bool = False) -> list[dict]:
     return items
 
 
+def _suggestions_from_doc(doc: dict) -> dict:
+    """Extract a doc's suggested edits (Docs suggestion mode) as per-paragraph deltas.
+
+    The doc must be fetched with suggestionsViewMode="SUGGESTIONS_INLINE" so that
+    suggested insertions and deletions appear inline on their text runs. For each
+    body paragraph carrying any suggestion, returns a delta with:
+      - before:  the text as it stands now (insertions removed, deletions kept)
+      - after:   the text if every suggestion is accepted (insertions kept, deletions removed)
+      - marked:  an inline diff — insertions wrapped {+like this+}, deletions [-like this-]
+      - style_change: suggestion IDs for any suggested paragraph-style change on the paragraph
+
+    Paragraph breaks inside a suggested span render as ¶ in `marked`, so suggested
+    splits and joins stay visible. Walks into table cells in reading order. A run
+    marked for deletion is treated as "before" text even if it also carries an
+    insertion ID (a suggested replacement of that run).
+    """
+    paragraphs: list[dict] = []
+    insertion_ids: set[str] = set()
+    deletion_ids: set[str] = set()
+    style_ids: set[str] = set()
+
+    def visit(content: list[dict]) -> None:
+        for el in content:
+            table = el.get("table")
+            if table is not None:
+                for row in table.get("tableRows", []):
+                    for cell in row.get("tableCells", []):
+                        visit(cell.get("content", []))
+                continue
+            paragraph = el.get("paragraph")
+            if paragraph is None:
+                continue
+            before_parts, after_parts, marked_parts = [], [], []
+            changed = False
+            for pe in paragraph.get("elements", []):
+                text_run = pe.get("textRun")
+                if text_run is None:
+                    continue
+                text = text_run.get("content", "")
+                inserted = text_run.get("suggestedInsertionIds")
+                deleted = text_run.get("suggestedDeletionIds")
+                if inserted:
+                    insertion_ids.update(inserted)
+                if deleted:
+                    deletion_ids.update(deleted)
+                if deleted:
+                    before_parts.append(text)
+                    marked_parts.append("[-" + text.replace("\n", "¶") + "-]")
+                    changed = True
+                elif inserted:
+                    after_parts.append(text)
+                    marked_parts.append("{+" + text.replace("\n", "¶") + "+}")
+                    changed = True
+                else:
+                    before_parts.append(text)
+                    after_parts.append(text)
+                    marked_parts.append(text)
+            style_change = list(paragraph.get("suggestedParagraphStyleChanges", {}).keys())
+            style_ids.update(style_change)
+            if changed or style_change:
+                paragraphs.append({
+                    "before": "".join(before_parts).strip(),
+                    "after": "".join(after_parts).strip(),
+                    "marked": "".join(marked_parts).strip(),
+                    "style_change": style_change,
+                })
+
+    visit(doc.get("body", {}).get("content", []))
+    return {
+        "title": doc.get("title", ""),
+        "insertion_count": len(insertion_ids),
+        "deletion_count": len(deletion_ids),
+        "paragraph_style_change_count": len(style_ids),
+        "changed_paragraphs": len(paragraphs),
+        "paragraphs": paragraphs,
+    }
+
+
 # Font families treated as code/monospace, so safe-edit tooling can skip them.
 _MONOSPACE_FONTS = frozenset({
     "Courier New", "Consolas", "Roboto Mono", "Source Code Pro", "Inconsolata",
@@ -2169,6 +2247,19 @@ def outline_document(doc_id_or_url: str, full: bool = False) -> dict:
     return {"item_count": len(items), "items": items}
 
 
+def list_suggestions(doc_id_or_url: str) -> dict:
+    """Return a doc's suggested edits (suggestion mode) as per-paragraph before→after deltas.
+
+    Fetches with SUGGESTIONS_INLINE so a reviewer's suggestions render inline, then
+    groups them by paragraph — a way to harvest an editor's deltas without accepting
+    them in the doc. See _suggestions_from_doc for the shape of each delta."""
+    doc_id = _extract_doc_id(doc_id_or_url)
+    doc = _docs_service().documents().get(
+        documentId=doc_id, suggestionsViewMode="SUGGESTIONS_INLINE",
+    ).execute()
+    return _suggestions_from_doc(doc)
+
+
 def insert_after(
     doc_id_or_url: str, anchor: str, text: str, allow_multiple: bool = False,
     occurrence: int | None = None,
@@ -3160,6 +3251,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Include every body paragraph and table, not just headings and images.",
     )
 
+    p_suggestions = sub.add_parser(
+        "suggestions",
+        help="List a doc's suggested edits (suggestion mode) as per-paragraph before→after deltas.",
+    )
+    p_suggestions.add_argument("doc", metavar="DOC_URL")
+
     p_insert_after = sub.add_parser(
         "insert-after",
         help="Insert text as new paragraph(s) after the paragraph containing an anchor.",
@@ -3404,6 +3501,8 @@ def main() -> None:
         result = find_text(args.doc, args.text)
     elif args.command == "outline":
         result = outline_document(args.doc, full=args.full)
+    elif args.command == "suggestions":
+        result = list_suggestions(args.doc)
     elif args.command == "insert-after":
         result = insert_after(
             args.doc, args.anchor, args.text,
