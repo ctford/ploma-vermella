@@ -1259,6 +1259,14 @@ def test_place_figure_requests_builds_centered_image_and_caption():
     style = reqs[2]["updateParagraphStyle"]
     assert style["paragraphStyle"]["alignment"] == "CENTER"
     assert style["range"] == {"startIndex": 102, "endIndex": 103}
+    caption_len = len("Figure 2-1. A caption.")
+    caption_range = {"startIndex": 104, "endIndex": 104 + caption_len}
+    caption_align = reqs[3]["updateParagraphStyle"]
+    assert caption_align["paragraphStyle"]["alignment"] == "CENTER"
+    assert caption_align["range"] == caption_range
+    caption_italic = reqs[4]["updateTextStyle"]
+    assert caption_italic["textStyle"]["italic"] is True
+    assert caption_italic["range"] == caption_range
 
 
 def test_build_parser_place_figure():

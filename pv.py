@@ -916,9 +916,15 @@ def _place_figure_requests(
 
     `insert_index` is the position of the anchor paragraph's terminating newline.
     Produces: blank line, the (centered) image on its own paragraph, the caption
-    paragraph below it, then a trailing blank line — applied in one batchUpdate.
+    paragraph (centered, italic) below it, then a trailing blank line — applied
+    in one batchUpdate.
     """
     img_index = insert_index + 2
+    # The image insertion shifts everything after img_index right by 1 unit, so
+    # the caption (originally at img_index + 1, right after the paragraph-C
+    # newline) lands at img_index + 2 once the image is in place.
+    caption_start = img_index + 2
+    caption_end = caption_start + _utf16_len(caption)
     return [
         {"insertText": {
             "location": {"index": insert_index}, "text": "\n\n\n" + caption + "\n",
@@ -935,6 +941,16 @@ def _place_figure_requests(
             "range": {"startIndex": img_index, "endIndex": img_index + 1},
             "paragraphStyle": {"alignment": "CENTER"},
             "fields": "alignment",
+        }},
+        {"updateParagraphStyle": {
+            "range": {"startIndex": caption_start, "endIndex": caption_end},
+            "paragraphStyle": {"alignment": "CENTER"},
+            "fields": "alignment",
+        }},
+        {"updateTextStyle": {
+            "range": {"startIndex": caption_start, "endIndex": caption_end},
+            "textStyle": {"italic": True},
+            "fields": "italic",
         }},
     ]
 
