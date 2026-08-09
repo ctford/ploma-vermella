@@ -1872,6 +1872,16 @@ def replace_section(doc_id_or_url: str, heading_anchor: str, text: str) -> dict:
     requests.append({"insertText": {
         "location": {"index": plan["section_start"]}, "text": plan["insert_text"],
     }})
+    # insertText at the start of a section inherits the heading paragraph's style
+    # (e.g. HEADING_1), so force the newly inserted body back to normal text.
+    requests.append({"updateParagraphStyle": {
+        "range": {
+            "startIndex": plan["section_start"],
+            "endIndex": plan["section_start"] + len(plan["insert_text"]),
+        },
+        "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+        "fields": "namedStyleType",
+    }})
     service.documents().batchUpdate(documentId=doc_id, body={"requests": requests}).execute()
     return {
         "status": "replaced",
