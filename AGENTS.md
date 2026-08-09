@@ -88,6 +88,11 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
 
 All commands output JSON. Use `.venv/bin/pv -h` or `.venv/bin/pv <command> -h` for help.
 
+`pv list` only returns Google **Docs** (it filters on `mimeType='application/vnd.google-apps.document'`)
+— it silently returns an empty list for a folder that holds only Slides decks, Sheets, or other file
+types. Don't read an empty `pv list` result as "this folder is empty"; if you need every item in a
+folder regardless of type, query the Drive API directly instead.
+
 Text matching (`edit`, `find`, `link`, `style`, `insert-after`) is **quote-agnostic**: curly and
 straight quotes/apostrophes match interchangeably, so you don't have to reproduce smart quotes exactly.
 
