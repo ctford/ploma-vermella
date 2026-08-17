@@ -1302,6 +1302,31 @@ def _chapter_filename(index: int) -> str:
     return f"chapter-{index:02d}.xhtml"
 
 
+def _parse_part_spec(spec: str) -> tuple[str, str]:
+    """Parse a `--part` CLI value "TITLE=START_DOC_URL_OR_ID" into (title, doc_id)."""
+    title, sep, doc_ref = spec.partition("=")
+    if not sep:
+        raise ValueError(f"--part must be TITLE=START_DOC_URL, got: {spec!r}")
+    return title.strip(), _extract_doc_id(doc_ref.strip())
+
+
+def _assign_parts(doc_ids: list[str], part_specs: list[tuple[str, str]]) -> list[str | None]:
+    """Return, per doc id in order, the Part title active at that position.
+
+    part_specs is [(title, start_doc_id), ...]; a Part's chapters run from its start
+    doc (inclusive) until the next Part's start doc. Docs before the first Part's
+    start doc (front matter — Preface, Acknowledgements, ...) get None.
+    """
+    starts = {doc_id: title for title, doc_id in part_specs}
+    current = None
+    result = []
+    for doc_id in doc_ids:
+        if doc_id in starts:
+            current = starts[doc_id]
+        result.append(current)
+    return result
+
+
 _MEDIA_EXTENSIONS = {
     "image/png": "png",
     "image/jpeg": "jpg",
@@ -1487,12 +1512,41 @@ def _cover_title_page_xhtml(
     )
 
 
+def _toc_entries_html(chapters: list[dict], indent: str = "    ") -> str:
+    """Render nested <li> entries for a TOC <ol>, grouping chapters under a Part.
+
+    Front-matter chapters carrying no "part" (Preface, Acknowledgements, ...) render
+    as flat top-level entries. A run of consecutive chapters sharing the same "part"
+    title nests under one <li> for that part.
+    """
+    lines = []
+    i = 0
+    while i < len(chapters):
+        part = chapters[i].get("part")
+        if not part:
+            href = html.escape(chapters[i]["filename"])
+            title = html.escape(chapters[i]["title"])
+            lines.append(f'{indent}<li><a href="{href}">{title}</a></li>')
+            i += 1
+            continue
+        run = []
+        while i < len(chapters) and chapters[i].get("part") == part:
+            run.append(chapters[i])
+            i += 1
+        lines.append(f'{indent}<li class="toc-part">{html.escape(part)}')
+        lines.append(f"{indent}  <ol>")
+        for ch in run:
+            href = html.escape(ch["filename"])
+            title = html.escape(ch["title"])
+            lines.append(f'{indent}    <li><a href="{href}">{title}</a></li>')
+        lines.append(f"{indent}  </ol>")
+        lines.append(f"{indent}</li>")
+    return "\n".join(lines)
+
+
 def _toc_page_xhtml(chapters: list[dict]) -> str:
-    """Render a visible Table of Contents page linking to each chapter."""
-    items = "\n      ".join(
-        f'<li><a href="{html.escape(ch["filename"])}">{html.escape(ch["title"])}</a></li>'
-        for ch in chapters
-    )
+    """Render a visible Table of Contents page, chapters grouped under their Part."""
+    items = _toc_entries_html(chapters, indent="      ")
     return (
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
         "<html xmlns=\"http://www.w3.org/1999/xhtml\" "
@@ -1505,7 +1559,7 @@ def _toc_page_xhtml(chapters: list[dict]) -> str:
         "  <section epub:type=\"toc\" class=\"toc-page\">\n"
         "    <h1>Contents</h1>\n"
         "    <ol>\n"
-        f"      {items}\n"
+        f"{items}\n"
         "    </ol>\n"
         "  </section>\n"
         "</body>\n"
@@ -1524,10 +1578,7 @@ def _read_cover_image(cover: str) -> tuple[bytes, str]:
 
 def _epub_nav(book_title: str, chapters: list[dict]) -> str:
     """Return the EPUB navigation document."""
-    items = "\n      ".join(
-        f"<li><a href=\"{html.escape(ch['filename'])}\">{html.escape(ch['title'])}</a></li>"
-        for ch in chapters
-    )
+    items = _toc_entries_html(chapters, indent="      ")
     safe_title = html.escape(book_title)
     return (
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
@@ -1540,7 +1591,7 @@ def _epub_nav(book_title: str, chapters: list[dict]) -> str:
         "  <nav epub:type=\"toc\" id=\"toc\">\n"
         f"    <h1>{safe_title}</h1>\n"
         "    <ol>\n"
-        f"      {items}\n"
+        f"{items}\n"
         "    </ol>\n"
         "  </nav>\n"
         "</body>\n"
@@ -2603,21 +2654,30 @@ def build_epub(
     cover: str | None = None,
     max_image_width: int = 1600,
     optimize_images: bool = True,
+    parts: list[str] | None = None,
 ) -> dict:
     """Build an EPUB from multiple Google Docs, excluding PV review sections.
 
     title/subtitle/author are book metadata (book-specific — supply from the
     work's context, not hardcoded). cover is a local path or URL to a cover image.
     When optimize_images is set, images wider than max_image_width are downscaled
-    and re-encoded to keep the EPUB small.
+    and re-encoded to keep the EPUB small. parts is a list of "TITLE=START_DOC_URL"
+    strings (book-specific — e.g. "Part I: Reverse Engineering=<ch1-doc-url>");
+    the named chapter starts that Part and every later chapter belongs to it until
+    the next Part's start doc. Chapters before the first Part's start (front
+    matter — Preface, Acknowledgements, ...) aren't grouped under any Part. Parts
+    are shown in the Contents page and EPUB navigation, not inside chapter text.
     """
+    part_specs = [_parse_part_spec(spec) for spec in (parts or [])]
+    doc_ids = [_extract_doc_id(doc_ref) for doc_ref in doc_ids_or_urls]
+    parts_by_index = _assign_parts(doc_ids, part_specs)
+
     docs_service = _docs_service()
     chapters = []
     media_items = []  # OPF manifest entries for images
     media_files = []  # (epub href, bytes) to write into the zip
     skipped_images = 0
-    for index, doc_ref in enumerate(doc_ids_or_urls, start=1):
-        doc_id = _extract_doc_id(doc_ref)
+    for index, doc_id in enumerate(doc_ids, start=1):
         doc = docs_service.documents().get(documentId=doc_id).execute()
         chapter_title = doc.get("title", f"Chapter {index}")
         blocks = _extract_blocks(doc)
@@ -2656,6 +2716,7 @@ def build_epub(
             "filename": _chapter_filename(index),
             "xhtml": _blocks_to_xhtml(chapter_title, blocks, image_paths),
             "image_count": len(image_paths),
+            "part": parts_by_index[index - 1],
         })
 
     book_title = title or _default_epub_title([chapter["title"] for chapter in chapters])
@@ -2706,6 +2767,10 @@ def build_epub(
         "p.author { margin-top: 1.5em; font-size: 1.1em; }\n"
         ".toc-page ol { list-style: none; padding: 0; }\n"
         ".toc-page li { margin: 0.5em 0; font-size: 1.1em; }\n"
+        ".toc-page li.toc-part { font-weight: bold; margin-top: 1.2em; "
+        "text-transform: uppercase; letter-spacing: 0.03em; }\n"
+        ".toc-page li.toc-part ol { margin: 0.3em 0 0 1.5em; }\n"
+        ".toc-page li.toc-part li { font-weight: normal; text-transform: none; }\n"
     )
 
     with zipfile.ZipFile(output_path, "w") as epub:
@@ -2745,6 +2810,7 @@ def build_epub(
                 "title": chapter["title"],
                 "filename": chapter["filename"],
                 "images": chapter["image_count"],
+                "part": chapter["part"],
             }
             for chapter in chapters
         ],
@@ -2762,12 +2828,14 @@ def build_pdf(
     optimize_images: bool = True,
     paper_size: str = "letter",
     keep_epub: bool = False,
+    parts: list[str] | None = None,
 ) -> dict:
     """Build a paginated PDF from multiple Google Docs.
 
     Reuses build_epub's Docs-to-EPUB pipeline, then renders that EPUB to PDF with
     Calibre's `ebook-convert` CLI (a separate install — `brew install --cask calibre`
-    — not a Python dependency; EPUB output doesn't need it).
+    — not a Python dependency; EPUB output doesn't need it). See build_epub for the
+    `parts` format.
     """
     if shutil.which("ebook-convert") is None:
         raise RuntimeError(
@@ -2786,6 +2854,7 @@ def build_pdf(
             cover=cover,
             max_image_width=max_image_width,
             optimize_images=optimize_images,
+            parts=parts,
         )
         book_title = epub_result["title"]
         pdf_path = Path(output) if output else _default_pdf_output_path(book_title)
@@ -3354,6 +3423,15 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Don't downscale or re-encode images (embed at source resolution).",
     )
+    p_epub.add_argument(
+        "--part",
+        action="append",
+        metavar="TITLE=START_DOC_URL",
+        help="Group chapters under a Part heading in the Contents/nav, e.g. "
+             "'Part I: Reverse Engineering=<ch1-doc-url>'. Repeatable; a Part runs from "
+             "its start doc until the next Part's start doc. Chapters before the first "
+             "--part (front matter) aren't grouped.",
+    )
 
     p_pdf = sub.add_parser(
         "build-pdf",
@@ -3406,6 +3484,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "--keep-epub",
         action="store_true",
         help="Also keep the intermediate EPUB alongside the PDF (same path, .epub suffix).",
+    )
+    p_pdf.add_argument(
+        "--part",
+        action="append",
+        metavar="TITLE=START_DOC_URL",
+        help="Group chapters under a Part heading in the Contents page, e.g. "
+             "'Part I: Reverse Engineering=<ch1-doc-url>'. Repeatable; a Part runs from "
+             "its start doc until the next Part's start doc. Chapters before the first "
+             "--part (front matter) aren't grouped.",
     )
 
     p_review_copy = sub.add_parser(
@@ -3731,6 +3818,7 @@ def main() -> None:
             cover=args.cover,
             max_image_width=args.max_image_width,
             optimize_images=not args.no_optimize,
+            parts=args.part,
         )
     elif args.command == "build-pdf":
         result = build_pdf(
@@ -3744,6 +3832,7 @@ def main() -> None:
             optimize_images=not args.no_optimize,
             paper_size=args.paper_size,
             keep_epub=args.keep_epub,
+            parts=args.part,
         )
     elif args.command == "review-copy":
         result = make_review_copy(

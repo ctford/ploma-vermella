@@ -83,9 +83,9 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
 .venv/bin/pv comments <doc-url> [--include-resolved]   # list comments: id, content, quoted text, resolved
 .venv/bin/pv resolve <doc-url> <comment-id>            # resolve a comment
 .venv/bin/pv resolve-all <doc-url>                     # resolve every unresolved comment
-.venv/bin/pv build-epub <doc-url> ... [-o OUT] [--title T] [--subtitle S] [--author A] [--cover IMG] [--max-image-width N] [--no-optimize]
-                                                       # build an EPUB; book metadata comes from context, not hardcoded; images downscaled to 1600px by default
-.venv/bin/pv build-pdf <doc-url> ... [-o OUT] [--title T] [--subtitle S] [--author A] [--cover IMG] [--paper-size letter|a4|...] [--keep-epub]
+.venv/bin/pv build-epub <doc-url> ... [-o OUT] [--title T] [--subtitle S] [--author A] [--cover IMG] [--max-image-width N] [--no-optimize] [--part "TITLE=START_DOC_URL" ...]
+                                                       # build an EPUB; book metadata comes from context, not hardcoded; images downscaled to 1600px by default; --part groups chapters under a Part heading in the Contents/nav
+.venv/bin/pv build-pdf <doc-url> ... [-o OUT] [--title T] [--subtitle S] [--author A] [--cover IMG] [--paper-size letter|a4|...] [--keep-epub] [--part "TITLE=START_DOC_URL" ...]
                                                        # build a paginated PDF via the same pipeline as build-epub, rendered with Calibre's ebook-convert
 ```
 

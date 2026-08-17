@@ -10,6 +10,7 @@ import pytest
 from PIL import Image
 
 from pv import (
+    _assign_parts,
     _block_html,
     _blocks_to_xhtml,
     _body_element_at,
@@ -54,6 +55,7 @@ from pv import (
     _paragraph_text,
     _parse_append_blocks,
     _parse_hex_color,
+    _parse_part_spec,
     _parse_table_row,
     _place_figure_requests,
     _plan_edit_matches,
@@ -67,6 +69,7 @@ from pv import (
     _suggestions_from_doc,
     _text_from_elements,
     _title_page_xhtml,
+    _toc_entries_html,
     _toc_page_xhtml,
     _utf16_len,
     main,
@@ -845,6 +848,39 @@ def test_toc_page_xhtml_lists_chapter_links():
     xhtml = _toc_page_xhtml([{"filename": "chapter-01.xhtml", "title": "Ch1"}])
     assert '<a href="chapter-01.xhtml">Ch1</a>' in xhtml
     assert 'epub:type="toc"' in xhtml
+
+def test_toc_entries_html_groups_chapters_under_their_part():
+    chapters = [
+        {"filename": "chapter-01.xhtml", "title": "Preface", "part": None},
+        {"filename": "chapter-02.xhtml", "title": "Ch1", "part": "Part I: Reverse Engineering"},
+        {"filename": "chapter-03.xhtml", "title": "Ch2", "part": "Part I: Reverse Engineering"},
+        {"filename": "chapter-04.xhtml", "title": "Ch3", "part": "Part II: Forward Engineering"},
+    ]
+    html_out = _toc_entries_html(chapters)
+    assert '<li><a href="chapter-01.xhtml">Preface</a></li>' in html_out
+    assert '<li class="toc-part">Part I: Reverse Engineering' in html_out
+    assert '<li class="toc-part">Part II: Forward Engineering' in html_out
+    assert '<a href="chapter-02.xhtml">Ch1</a>' in html_out
+    assert html_out.index("Part I") < html_out.index("Ch1") < html_out.index("Part II")
+
+def test_parse_part_spec_splits_title_and_doc_id():
+    title, doc_id = _parse_part_spec(
+        "Part I: Reverse Engineering=https://docs.google.com/document/d/abc123/edit"
+    )
+    assert title == "Part I: Reverse Engineering"
+    assert doc_id == "abc123"
+
+def test_parse_part_spec_requires_equals():
+    with pytest.raises(ValueError):
+        _parse_part_spec("Part I: Reverse Engineering")
+
+def test_assign_parts_runs_until_next_start_doc():
+    doc_ids = ["preface", "ch1", "ch2", "ch3"]
+    part_specs = [("Part I: Reverse Engineering", "ch1"), ("Part II: Forward Engineering", "ch3")]
+    assert _assign_parts(doc_ids, part_specs) == [
+        None, "Part I: Reverse Engineering", "Part I: Reverse Engineering",
+        "Part II: Forward Engineering",
+    ]
 
 def test_epub_package_includes_author_creator():
     package = _epub_package(
