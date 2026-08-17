@@ -17,7 +17,7 @@ from pv import (
     _bullets_plan,
     _chapter_filename,
     _cite_plan,
-    _cover_page_xhtml,
+    _cover_title_page_xhtml,
     _default_epub_output_path,
     _default_epub_title,
     _default_pdf_output_path,
@@ -67,6 +67,7 @@ from pv import (
     _suggestions_from_doc,
     _text_from_elements,
     _title_page_xhtml,
+    _toc_page_xhtml,
     _utf16_len,
     main,
 )
@@ -481,6 +482,9 @@ def test_ebook_convert_command_includes_paper_size():
     assert command[:3] == ["ebook-convert", "/tmp/book.epub", "/tmp/book.pdf"]
     assert "--paper-size" in command
     assert command[command.index("--paper-size") + 1] == "a4"
+    assert "--pdf-no-cover" in command
+    assert "--pdf-add-toc" in command
+    assert command[command.index("--toc-title") + 1] == "Contents"
 
 
 def test_review_copy_title_appends_iso_date_suffix():
@@ -829,10 +833,18 @@ def test_title_page_xhtml_omits_missing_fields():
     assert "subtitle" not in xhtml
     assert "author" not in xhtml
 
-def test_cover_page_xhtml_references_image():
-    xhtml = _cover_page_xhtml("images/cover.jpg")
+def test_cover_title_page_xhtml_combines_image_and_title():
+    xhtml = _cover_title_page_xhtml("My Book", "images/cover.jpg", "A Subtitle", "Chris Ford")
     assert '<img class="cover" src="images/cover.jpg" alt="Cover"/>' in xhtml
-    assert 'epub:type="cover"' in xhtml
+    assert 'epub:type="cover titlepage"' in xhtml
+    assert '<h1 class="title">My Book</h1>' in xhtml
+    assert '<p class="subtitle">A Subtitle</p>' in xhtml
+    assert '<p class="author">Chris Ford</p>' in xhtml
+
+def test_toc_page_xhtml_lists_chapter_links():
+    xhtml = _toc_page_xhtml([{"filename": "chapter-01.xhtml", "title": "Ch1"}])
+    assert '<a href="chapter-01.xhtml">Ch1</a>' in xhtml
+    assert 'epub:type="toc"' in xhtml
 
 def test_epub_package_includes_author_creator():
     package = _epub_package(

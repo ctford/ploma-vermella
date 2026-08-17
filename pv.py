@@ -1457,19 +1457,56 @@ def _title_page_xhtml(title: str, subtitle: str | None = None, author: str | Non
     )
 
 
-def _cover_page_xhtml(image_href: str) -> str:
-    """Render a full-page cover image as an XHTML document."""
+def _cover_title_page_xhtml(
+    title: str, image_href: str, subtitle: str | None = None, author: str | None = None,
+) -> str:
+    """Render a single front page combining the cover image with title/subtitle/author."""
     src = html.escape(image_href, quote=True)
+    parts = [
+        f'<img class="cover" src="{src}" alt="Cover"/>',
+        f'<h1 class="title">{html.escape(title)}</h1>',
+    ]
+    if subtitle:
+        parts.append(f'<p class="subtitle">{html.escape(subtitle)}</p>')
+    if author:
+        parts.append(f'<p class="author">{html.escape(author)}</p>')
+    body = "\n    ".join(parts)
     return (
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
         "<html xmlns=\"http://www.w3.org/1999/xhtml\" "
         f"xmlns:epub=\"{_EPUB_NS}\">\n"
         "<head>\n"
-        "  <title>Cover</title>\n"
+        f"  <title>{html.escape(title)}</title>\n"
         "  <link rel=\"stylesheet\" type=\"text/css\" href=\"styles.css\"/>\n"
         "</head>\n"
         "<body>\n"
-        f"  <section epub:type=\"cover\">\n    <img class=\"cover\" src=\"{src}\" alt=\"Cover\"/>\n"
+        "  <section epub:type=\"cover titlepage\" class=\"cover-titlepage\">\n"
+        f"    {body}\n  </section>\n"
+        "</body>\n"
+        "</html>\n"
+    )
+
+
+def _toc_page_xhtml(chapters: list[dict]) -> str:
+    """Render a visible Table of Contents page linking to each chapter."""
+    items = "\n      ".join(
+        f'<li><a href="{html.escape(ch["filename"])}">{html.escape(ch["title"])}</a></li>'
+        for ch in chapters
+    )
+    return (
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+        "<html xmlns=\"http://www.w3.org/1999/xhtml\" "
+        f"xmlns:epub=\"{_EPUB_NS}\">\n"
+        "<head>\n"
+        "  <title>Contents</title>\n"
+        "  <link rel=\"stylesheet\" type=\"text/css\" href=\"styles.css\"/>\n"
+        "</head>\n"
+        "<body>\n"
+        "  <section epub:type=\"toc\" class=\"toc-page\">\n"
+        "    <h1>Contents</h1>\n"
+        "    <ol>\n"
+        f"      {items}\n"
+        "    </ol>\n"
         "  </section>\n"
         "</body>\n"
         "</html>\n"
@@ -1604,12 +1641,22 @@ def _default_pdf_output_path(book_title: str, stamp: datetime | None = None) -> 
 def _ebook_convert_command(
     epub_path: Path, pdf_path: Path, paper_size: str = "letter",
 ) -> list[str]:
-    """Return the Calibre `ebook-convert` argv that renders an EPUB to a paginated PDF."""
+    """Return the Calibre `ebook-convert` argv that renders an EPUB to a paginated PDF.
+
+    --pdf-no-cover stops Calibre from prepending its own auto-generated cover-image
+    page on top of the EPUB's own cover+title page (otherwise the cover appears
+    twice). --pdf-add-toc appends a page-numbered index built from the EPUB's
+    chapters, alongside the in-flow Contents page the EPUB itself already has;
+    --toc-title pins its heading to English regardless of system locale.
+    """
     return [
         "ebook-convert",
         str(epub_path),
         str(pdf_path),
         "--paper-size", paper_size,
+        "--pdf-no-cover",
+        "--pdf-add-toc",
+        "--toc-title", "Contents",
     ]
 
 
@@ -2617,7 +2664,8 @@ def build_epub(
 
     book_id = str(uuid.uuid4())
 
-    # Front matter: an optional cover-image page, then a generated title page.
+    # Front matter: a single cover+title page (or a text-only title page without a
+    # cover), then a visible table of contents page.
     front_matter = []  # [{id, href}] in spine order
     front_files = []   # [(href, xhtml)]
     cover_image_id = None
@@ -2629,10 +2677,13 @@ def build_epub(
         cover_image_id = "cover-image"
         media_items.insert(0, {"id": cover_image_id, "href": cover_href, "media_type": cover_type})
         media_files.append((cover_href, cover_bytes))
-        front_matter.append({"id": "cover-page", "href": "cover.xhtml"})
-        front_files.append(("cover.xhtml", _cover_page_xhtml(cover_href)))
+        title_xhtml = _cover_title_page_xhtml(book_title, cover_href, subtitle, author)
+    else:
+        title_xhtml = _title_page_xhtml(book_title, subtitle, author)
     front_matter.append({"id": "titlepage", "href": "title.xhtml"})
-    front_files.append(("title.xhtml", _title_page_xhtml(book_title, subtitle, author)))
+    front_files.append(("title.xhtml", title_xhtml))
+    front_matter.append({"id": "toc-page", "href": "toc.xhtml"})
+    front_files.append(("toc.xhtml", _toc_page_xhtml(chapters)))
 
     nav = _epub_nav(book_title, chapters)
     package = _epub_package(
@@ -2647,11 +2698,14 @@ def build_epub(
         "figure { margin: 1em 0; text-align: center; }\n"
         "img { max-width: 100%; height: auto; }\n"
         ".titlepage { text-align: center; margin-top: 20%; }\n"
-        "h1.title { font-size: 2.2em; }\n"
-        "p.subtitle { font-size: 1.2em; font-style: italic; }\n"
-        "p.author { margin-top: 2em; font-size: 1.1em; }\n"
-        "section[epub|type=\"cover\"] { max-width: none; }\n"
-        "img.cover { width: 100%; height: 100%; object-fit: contain; }\n"
+        ".cover-titlepage { text-align: center; max-width: none; padding-top: 8%; }\n"
+        "img.cover { max-width: 70%; max-height: 55vh; height: auto; "
+        "margin: 0 auto 1.5em; display: block; }\n"
+        "h1.title { font-size: 2.2em; margin: 0.4em 0 0.2em; }\n"
+        "p.subtitle { font-size: 1.2em; font-style: italic; margin: 0 0 1em; }\n"
+        "p.author { margin-top: 1.5em; font-size: 1.1em; }\n"
+        ".toc-page ol { list-style: none; padding: 0; }\n"
+        ".toc-page li { margin: 0.5em 0; font-size: 1.1em; }\n"
     )
 
     with zipfile.ZipFile(output_path, "w") as epub:
