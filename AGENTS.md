@@ -84,6 +84,8 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
 .venv/bin/pv resolve-all <doc-url>                     # resolve every unresolved comment
 .venv/bin/pv build-epub <doc-url> ... [-o OUT] [--title T] [--subtitle S] [--author A] [--cover IMG] [--max-image-width N] [--no-optimize]
                                                        # build an EPUB; book metadata comes from context, not hardcoded; images downscaled to 1600px by default
+.venv/bin/pv build-pdf <doc-url> ... [-o OUT] [--title T] [--subtitle S] [--author A] [--cover IMG] [--paper-size letter|a4|...] [--keep-epub]
+                                                       # build a paginated PDF via the same pipeline as build-epub, rendered with Calibre's ebook-convert
 ```
 
 All commands output JSON. Use `.venv/bin/pv -h` or `.venv/bin/pv <command> -h` for help.
@@ -165,6 +167,10 @@ python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]" &&
 ```
 
 Credentials: Google Cloud project with Docs API, Drive API, Slides API, and Sheets API enabled, OAuth 2.0 Desktop credentials saved as `credentials/client_secret.json`. First run opens a browser for authorisation; token cached at `credentials/token.json`.
+
+`pv build-pdf` shells out to Calibre's `ebook-convert` CLI (not a Python dependency) to
+render the intermediate EPUB to PDF: `brew install --cask calibre`. `pv build-epub` doesn't
+need it.
 
 ## OAuth Reauth
 

@@ -4,6 +4,7 @@ import inspect
 import io
 import os
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -19,9 +20,11 @@ from pv import (
     _cover_page_xhtml,
     _default_epub_output_path,
     _default_epub_title,
+    _default_pdf_output_path,
     _doc_index_at,
     _doc_text_runs,
     _downscale_image,
+    _ebook_convert_command,
     _epub_nav,
     _epub_package,
     _extract_blocks,
@@ -461,6 +464,23 @@ def test_default_epub_output_path_includes_date_suffix():
         stamp=datetime(2026, 3, 24, 10, 30),
     )
     assert str(path) == "dist/example-book-20260324.epub"
+
+
+def test_default_pdf_output_path_includes_date_suffix():
+    path = _default_pdf_output_path(
+        "Example Book",
+        stamp=datetime(2026, 3, 24, 10, 30),
+    )
+    assert str(path) == "dist/example-book-20260324.pdf"
+
+
+def test_ebook_convert_command_includes_paper_size():
+    command = _ebook_convert_command(
+        Path("/tmp/book.epub"), Path("/tmp/book.pdf"), paper_size="a4",
+    )
+    assert command[:3] == ["ebook-convert", "/tmp/book.epub", "/tmp/book.pdf"]
+    assert "--paper-size" in command
+    assert command[command.index("--paper-size") + 1] == "a4"
 
 
 def test_review_copy_title_appends_iso_date_suffix():

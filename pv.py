@@ -6,6 +6,9 @@ import html
 import json
 import mimetypes
 import re
+import shutil
+import subprocess
+import tempfile
 import urllib.request
 import uuid
 import zipfile
@@ -1591,6 +1594,24 @@ def _default_epub_output_path(book_title: str, stamp: datetime | None = None) ->
     return Path("dist") / f"{_slugify(book_title)}-{stamp.strftime('%Y%m%d')}.epub"
 
 
+def _default_pdf_output_path(book_title: str, stamp: datetime | None = None) -> Path:
+    """Return the default gitignored PDF output path."""
+    stamp = stamp or datetime.now()
+    return Path("dist") / f"{_slugify(book_title)}-{stamp.strftime('%Y%m%d')}.pdf"
+
+
+def _ebook_convert_command(
+    epub_path: Path, pdf_path: Path, paper_size: str = "letter",
+) -> list[str]:
+    """Return the Calibre `ebook-convert` argv that renders an EPUB to a paginated PDF."""
+    return [
+        "ebook-convert",
+        str(epub_path),
+        str(pdf_path),
+        "--paper-size", paper_size,
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -2645,6 +2666,70 @@ def build_epub(
     }
 
 
+def build_pdf(
+    doc_ids_or_urls: list[str],
+    output: str | None = None,
+    title: str | None = None,
+    subtitle: str | None = None,
+    author: str | None = None,
+    cover: str | None = None,
+    max_image_width: int = 1600,
+    optimize_images: bool = True,
+    paper_size: str = "letter",
+    keep_epub: bool = False,
+) -> dict:
+    """Build a paginated PDF from multiple Google Docs.
+
+    Reuses build_epub's Docs-to-EPUB pipeline, then renders that EPUB to PDF with
+    Calibre's `ebook-convert` CLI (a separate install — `brew install --cask calibre`
+    — not a Python dependency; EPUB output doesn't need it).
+    """
+    if shutil.which("ebook-convert") is None:
+        raise RuntimeError(
+            "ebook-convert not found on PATH. Install Calibre "
+            "(e.g. `brew install --cask calibre`) to build PDFs; EPUB output doesn't need it."
+        )
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        epub_path = Path(tmp_dir) / "book.epub"
+        epub_result = build_epub(
+            doc_ids_or_urls,
+            output=str(epub_path),
+            title=title,
+            subtitle=subtitle,
+            author=author,
+            cover=cover,
+            max_image_width=max_image_width,
+            optimize_images=optimize_images,
+        )
+        book_title = epub_result["title"]
+        pdf_path = Path(output) if output else _default_pdf_output_path(book_title)
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+
+        kept_epub_path = None
+        if keep_epub:
+            kept_epub_path = pdf_path.with_suffix(".epub")
+            shutil.copyfile(epub_path, kept_epub_path)
+
+        command = _ebook_convert_command(epub_path, pdf_path, paper_size=paper_size)
+        proc = subprocess.run(command, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise RuntimeError(f"ebook-convert failed:\n{proc.stderr.strip()}")
+
+    return {
+        "status": "built",
+        "title": book_title,
+        "subtitle": subtitle,
+        "author": author,
+        "has_cover": epub_result["has_cover"],
+        "output": str(pdf_path),
+        "epub_kept": str(kept_epub_path) if kept_epub_path else None,
+        "images_embedded": epub_result["images_embedded"],
+        "images_skipped": epub_result["images_skipped"],
+        "chapters": epub_result["chapters"],
+    }
+
+
 def append_content(doc_id_or_url: str, heading: str, text: str) -> dict:
     """
     Append a headed section into the Ploma Vermella Review section, creating
@@ -3185,6 +3270,59 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Don't downscale or re-encode images (embed at source resolution).",
     )
 
+    p_pdf = sub.add_parser(
+        "build-pdf",
+        help="Build a paginated PDF from one or more Google Docs (requires Calibre's "
+             "ebook-convert on PATH).",
+    )
+    p_pdf.add_argument(
+        "docs",
+        metavar="DOC_URL",
+        nargs="+",
+        help="One or more Google Doc URLs/IDs to include as chapters.",
+    )
+    p_pdf.add_argument(
+        "-o", "--output",
+        help="Output PDF path. Defaults to dist/<slugified-title>-YYYYMMDD.pdf.",
+    )
+    p_pdf.add_argument(
+        "--title",
+        help="Book title for the PDF metadata and default filename.",
+    )
+    p_pdf.add_argument(
+        "--subtitle",
+        help="Book subtitle, shown on the generated title page.",
+    )
+    p_pdf.add_argument(
+        "--author",
+        help="Author, shown on the title page.",
+    )
+    p_pdf.add_argument(
+        "--cover",
+        help="Cover image (local path or URL) used as the PDF's first page.",
+    )
+    p_pdf.add_argument(
+        "--max-image-width",
+        type=int,
+        default=1600,
+        help="Downscale images wider than this many pixels (default 1600).",
+    )
+    p_pdf.add_argument(
+        "--no-optimize",
+        action="store_true",
+        help="Don't downscale or re-encode images (embed at source resolution).",
+    )
+    p_pdf.add_argument(
+        "--paper-size",
+        default="letter",
+        help="Page size passed to ebook-convert, e.g. letter, a4 (default letter).",
+    )
+    p_pdf.add_argument(
+        "--keep-epub",
+        action="store_true",
+        help="Also keep the intermediate EPUB alongside the PDF (same path, .epub suffix).",
+    )
+
     p_review_copy = sub.add_parser(
         "review-copy",
         help="Copy a Google Doc into a folder with a dated title and clear its PV review section.",
@@ -3498,6 +3636,19 @@ def main() -> None:
             cover=args.cover,
             max_image_width=args.max_image_width,
             optimize_images=not args.no_optimize,
+        )
+    elif args.command == "build-pdf":
+        result = build_pdf(
+            args.docs,
+            output=args.output,
+            title=args.title,
+            subtitle=args.subtitle,
+            author=args.author,
+            cover=args.cover,
+            max_image_width=args.max_image_width,
+            optimize_images=not args.no_optimize,
+            paper_size=args.paper_size,
+            keep_epub=args.keep_epub,
         )
     elif args.command == "review-copy":
         result = make_review_copy(

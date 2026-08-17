@@ -32,6 +32,16 @@ On first use, a browser window will open for OAuth authorisation. The token is c
 
 If you add APIs or OAuth scopes later, move `credentials/token.json` aside and rerun a `pv` command to force reauthorisation.
 
+### 3. Calibre — optional, only for `pv build-pdf`
+
+`pv build-pdf` renders its intermediate EPUB to PDF via Calibre's `ebook-convert` CLI:
+
+```bash
+brew install --cask calibre
+```
+
+`pv build-epub` doesn't need this.
+
 ---
 
 ## Usage
@@ -69,6 +79,7 @@ pv cite <doc-url> <title> <url>             # italicize + hyperlink a work title
 pv heading <doc-url> <anchor> <level>       # set a paragraph's style (1-6, normal, title)
 pv bullets <doc-url> <start> [end] [--remove]  # make a paragraph range a bulleted/numbered list (or strip bullets)
 pv build-epub <doc-url> <doc-url> ...       # build an EPUB (figures preserved) into dist/ with a date suffix
+pv build-pdf <doc-url> <doc-url> ...        # build a paginated PDF (needs Calibre's ebook-convert) into dist/
 #
 # Run `pv -h` or `pv <command> -h` for the full command list.
 ```
