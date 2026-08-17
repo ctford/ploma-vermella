@@ -65,6 +65,7 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
 .venv/bin/pv clear <doc-url>                           # remove the review section
 .venv/bin/pv mv <doc-url> <folder-url>                 # move a doc into a folder
 .venv/bin/pv cp <doc-url> <folder-url> [--name NAME]   # copy a doc into a folder
+.venv/bin/pv upload <local-path> <folder-url> [--name NAME]  # upload a local file (e.g. a built EPUB/PDF) into a folder
 .venv/bin/pv review-copy <doc-url> <folder-url>        # copy with dated title, clear review section
 .venv/bin/pv edit <doc-url> <old> <new> [--all]        # replace text in the doc body
 .venv/bin/pv replace-section <doc-url> <heading> <text>  # replace a heading's body up to the next heading

@@ -19,6 +19,7 @@ from google.auth.transport.requests import AuthorizedSession, Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 
 SCOPES = [
     "https://www.googleapis.com/auth/documents",
@@ -1716,6 +1717,36 @@ def copy_document(
     }
 
 
+def upload_file(local_path: str, folder_id_or_url: str, name: str | None = None) -> dict:
+    """Upload a local file (e.g. a built EPUB/PDF) into a Drive folder."""
+    path = Path(local_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"No such file: {local_path}")
+    folder_id = _extract_folder_id(folder_id_or_url)
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    service = _drive_service()
+    media = MediaFileUpload(str(path), mimetype=media_type, resumable=True)
+    body = {"name": name or path.name, "parents": [folder_id]}
+    uploaded = (
+        service.files()
+        .create(
+            body=body,
+            media_body=media,
+            fields="id,name,parents,webViewLink",
+            supportsAllDrives=True,
+        )
+        .execute()
+    )
+    return {
+        "status": "uploaded",
+        "id": uploaded["id"],
+        "name": uploaded["name"],
+        "parents": uploaded.get("parents", []),
+        "url": uploaded.get("webViewLink", f"https://drive.google.com/file/d/{uploaded['id']}"),
+        "size_bytes": path.stat().st_size,
+    }
+
+
 def fetch_presentation(presentation_id_or_url: str) -> dict:
     """Return slide text content from a Google Slides presentation."""
     presentation_id = _extract_presentation_id(presentation_id_or_url)
@@ -3352,6 +3383,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Name for the copy. Defaults to the source document's name.",
     )
 
+    p_upload = sub.add_parser(
+        "upload", help="Upload a local file (e.g. a built EPUB/PDF) into a Drive folder.",
+    )
+    p_upload.add_argument("path", metavar="LOCAL_PATH")
+    p_upload.add_argument("folder", metavar="FOLDER_URL")
+    p_upload.add_argument(
+        "--name",
+        help="Name for the uploaded file. Defaults to the local filename.",
+    )
+
     p_comments = sub.add_parser(
         "comments",
         help="List a doc's comments (id, author, content, quoted text, resolved).",
@@ -3661,6 +3702,8 @@ def main() -> None:
         result = move_document(args.doc, args.folder)
     elif args.command == "cp":
         result = copy_document(args.doc, args.folder, name=args.name)
+    elif args.command == "upload":
+        result = upload_file(args.path, args.folder, name=args.name)
     elif args.command == "comments":
         result = list_comments(args.doc, include_resolved=args.include_resolved)
     elif args.command == "resolve":

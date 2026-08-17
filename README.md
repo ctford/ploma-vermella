@@ -80,6 +80,7 @@ pv heading <doc-url> <anchor> <level>       # set a paragraph's style (1-6, norm
 pv bullets <doc-url> <start> [end] [--remove]  # make a paragraph range a bulleted/numbered list (or strip bullets)
 pv build-epub <doc-url> <doc-url> ...       # build an EPUB (figures preserved) into dist/ with a date suffix
 pv build-pdf <doc-url> <doc-url> ...        # build a paginated PDF (needs Calibre's ebook-convert) into dist/
+pv upload <local-path> <folder-url>         # upload a local file (e.g. a built EPUB/PDF) into a Drive folder
 #
 # Run `pv -h` or `pv <command> -h` for the full command list.
 ```
