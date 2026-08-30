@@ -1274,6 +1274,13 @@ _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 _LONG_SENTENCE_WORDS = 35
 _SENTENCE_MEAN_TARGET = (20.0, 24.0)
 _EM_DASH_WORDS_PER = 150
+# Long sentences and nested asides are tolerated at a rate, not banned. Both
+# thresholds are Sarah Grey's demonstrated bar, measured on Chapter 7 — the one
+# chapter she has reviewed and signed off — which carries 46 sentences over 35
+# words and 7 nested asides in 8,925 words. Zero would be stricter than the
+# editor herself, which makes the check cry wolf.
+_LONG_SENTENCE_WORDS_PER = 180
+_NESTED_ASIDE_WORDS_PER = 1200
 
 _PASSIVE_RE = re.compile(
     r"\b(?:is|are|was|were|be|been|being)\s+(?:\w+ly\s+)?\w+(?:ed|en)\b", re.I
@@ -1326,9 +1333,12 @@ def _prose_text_checks(text: str) -> list[dict]:
     ))
 
     long_sentences = [s for s in sentences if len(s.split()) > _LONG_SENTENCE_WORDS]
+    long_budget = word_count / _LONG_SENTENCE_WORDS_PER
     checks.append(_check(
-        "sentences_over_35_words", "ok" if not long_sentences else "review",
-        len(long_sentences), "as few as possible; each is a split candidate",
+        "sentences_over_35_words",
+        "ok" if len(long_sentences) <= long_budget else "review",
+        f"{len(long_sentences)} (budget {long_budget:.0f})",
+        f"at most 1 per {_LONG_SENTENCE_WORDS_PER} words",
         [s[:120] for s in long_sentences[:5]],
     ))
 
@@ -1341,9 +1351,12 @@ def _prose_text_checks(text: str) -> list[dict]:
     ))
 
     nested = [s for s in sentences if s.count("—") >= 2]
+    nested_budget = word_count / _NESTED_ASIDE_WORDS_PER
     checks.append(_check(
-        "sentences_with_two_em_dashes", "ok" if not nested else "review",
-        len(nested), "0 — the nested aside is always removed",
+        "sentences_with_two_em_dashes",
+        "ok" if len(nested) <= nested_budget else "review",
+        f"{len(nested)} (budget {nested_budget:.0f})",
+        f"at most 1 per {_NESTED_ASIDE_WORDS_PER} words",
         [s[:120] for s in nested[:5]],
     ))
 
@@ -1414,42 +1427,80 @@ def _italic_spans(doc: dict) -> list[tuple[int, str]]:
     return spans
 
 
-def _terms_missing_italics(text: str, spans: list[tuple[int, str]], terms: list[str]) -> list[str]:
-    """Book terms whose first appearance isn't italicized.
+def _parse_terms(lines) -> list[tuple[str, str | None]]:
+    """Parse a terms file into (term, home_chapter) pairs.
 
-    This is the check that catches the bulk of an editor's formatting pass: a term
-    of art is italicized the first time it appears. Without a term list it can't be
-    seen at all, since "should this word be italic?" isn't visible in the text.
+    A line is either a bare `term` or `term = CHAPTER`, where CHAPTER is the chapter
+    that introduces it. Blank lines and `#` comments are ignored. The home chapter is
+    what makes first-use scoping possible — and is also the spine of a book index.
     """
-    italic_at = {start for start, _ in spans}
+    terms = []
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        term, _, home = line.partition("=")
+        terms.append((term.strip(), home.strip() or None))
+    return terms
+
+
+def _terms_italics_scope(
+    text: str, spans: list[tuple[int, str]],
+    terms: list[tuple[str, str | None]], chapter: str | None = None,
+) -> tuple[list[str], list[str]]:
+    """Terms italicized in the wrong place, as (missing on first use, italic away from home).
+
+    A term of art is italicized once in the whole book — at its first appearance,
+    in the chapter that introduces it. That makes the rule per-book, not per-document:
+    in any *other* chapter the same term should be plain. Checking first-use
+    per-document flags every borrowed term in every later chapter, which is wrong.
+
+    With no `chapter`, or for terms with no home recorded, the check falls back to
+    per-document first use.
+    """
     italic_ranges = [(start, start + len(raw)) for start, raw in spans]
-    missing = []
+    is_italic = lambda at: any(lo <= at < hi for lo, hi in italic_ranges)  # noqa: E731
     lowered = text.lower()
-    for term in terms:
-        key = term.strip().lower()
+    missing, away = [], []
+    for term, home in terms:
+        key = term.lower()
         if not key:
             continue
         match = re.search(rf"\b{re.escape(key)}\b", lowered)
         if match is None:
             continue
-        at = match.start()
-        if at in italic_at or any(lo <= at < hi for lo, hi in italic_ranges):
+        if chapter is not None and home is not None and home != chapter:
+            # Introduced elsewhere: it should be plain everywhere here.
+            if any(
+                re.fullmatch(rf"\W*{re.escape(key)}\W*", raw.strip().lower())
+                for _, raw in spans
+            ):
+                away.append(term)
             continue
-        missing.append(term.strip())
-    return missing
+        if not is_italic(match.start()):
+            missing.append(term)
+    return missing, away
 
 
-def _prose_structure_checks(doc: dict, text: str, terms: list[str] | None = None) -> list[dict]:
+def _prose_structure_checks(
+    doc: dict, text: str,
+    terms: list[tuple[str, str | None]] | None = None, chapter: str | None = None,
+) -> list[dict]:
     """Checks that need the document structure, not just its characters."""
     checks = []
 
     spans = _italic_spans(doc)
     if terms:
-        missing = _terms_missing_italics(text, spans, terms)
+        missing, away = _terms_italics_scope(text, spans, terms, chapter)
         checks.append(_check(
             "terms_missing_italics_on_first_use", "ok" if not missing else "review",
             len(missing), "0 — italicize a term of art the first time it appears",
             sorted(missing)[:30],
+        ))
+        checks.append(_check(
+            "terms_italicized_away_from_home_chapter", "ok" if not away else "review",
+            len(away), "0 — a term introduced in another chapter stays plain here",
+            sorted(away)[:30],
         ))
 
     late, repeated = [], []
@@ -1520,10 +1571,13 @@ def _prose_structure_checks(doc: dict, text: str, terms: list[str] | None = None
     return checks
 
 
-def _prose_check_from_doc(doc: dict, terms: list[str] | None = None) -> dict:
+def _prose_check_from_doc(
+    doc: dict, terms: list[tuple[str, str | None]] | None = None,
+    chapter: str | None = None,
+) -> dict:
     """Run the mechanical half of the pre-submission sweep over a document."""
     text = _extract_text(doc)
-    checks = _prose_text_checks(text) + _prose_structure_checks(doc, text, terms)
+    checks = _prose_text_checks(text) + _prose_structure_checks(doc, text, terms, chapter)
     return {
         "title": doc.get("title", ""),
         "word_count": len(text.split()),
@@ -2842,7 +2896,9 @@ def list_suggestions(doc_id_or_url: str) -> dict:
     return _suggestions_from_doc(doc)
 
 
-def prose_check(doc_id_or_url: str, terms_path: str | None = None) -> dict:
+def prose_check(
+    doc_id_or_url: str, terms_path: str | None = None, chapter: str | None = None,
+) -> dict:
     """Run the mechanical pre-submission sweep over a chapter.
 
     Reports the countable and greppable style rules with their target numbers, plus
@@ -2850,19 +2906,17 @@ def prose_check(doc_id_or_url: str, terms_path: str | None = None) -> dict:
     headings, figure references). Judgement checks are listed under `needs_a_reader`
     rather than guessed at. See the work's style_guide.md for the rules themselves.
 
-    `terms_path` points at a newline-delimited list of the work's terms of art (blank
-    lines and `#` comments ignored); with it, the sweep also reports which terms aren't
-    italicized on first use."""
+    `terms_path` points at a list of the work's terms of art, one per line, each
+    optionally `term = CHAPTER` naming the chapter that introduces it. `chapter` says
+    which chapter this document is, so terms introduced elsewhere are checked for the
+    opposite: they should be plain here, not italicized again."""
     doc_id = _extract_doc_id(doc_id_or_url)
     terms = None
     if terms_path:
         with open(terms_path, encoding="utf-8") as handle:
-            terms = [
-                line.strip() for line in handle
-                if line.strip() and not line.lstrip().startswith("#")
-            ]
+            terms = _parse_terms(handle)
     doc = _docs_service().documents().get(documentId=doc_id).execute()
-    return _prose_check_from_doc(doc, terms)
+    return _prose_check_from_doc(doc, terms, chapter)
 
 
 def insert_after(
@@ -4039,7 +4093,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p_prose_check.add_argument("doc", metavar="DOC_URL")
     p_prose_check.add_argument(
         "--terms", metavar="PATH", default=None,
-        help="Newline-delimited list of the work's terms of art, to check first-use italics.",
+        help="List of the work's terms of art (`term` or `term = CHAPTER`), for italics checks.",
+    )
+    p_prose_check.add_argument(
+        "--chapter", metavar="CH", default=None,
+        help="Which chapter this doc is (e.g. 07), so terms introduced elsewhere stay plain.",
     )
 
     p_insert_after = sub.add_parser(
@@ -4306,7 +4364,7 @@ def main() -> None:
     elif args.command == "suggestions":
         result = list_suggestions(args.doc)
     elif args.command == "prose-check":
-        result = prose_check(args.doc, args.terms)
+        result = prose_check(args.doc, args.terms, args.chapter)
     elif args.command == "insert-after":
         result = insert_after(
             args.doc, args.anchor, args.text,

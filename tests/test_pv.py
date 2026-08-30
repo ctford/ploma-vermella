@@ -58,6 +58,7 @@ from pv import (
     _parse_hex_color,
     _parse_part_spec,
     _parse_table_row,
+    _parse_terms,
     _place_figure_requests,
     _plan_edit_matches,
     _preceding_image_id,
@@ -71,7 +72,7 @@ from pv import (
     _slugify,
     _style_plan,
     _suggestions_from_doc,
-    _terms_missing_italics,
+    _terms_italics_scope,
     _text_from_elements,
     _title_page_xhtml,
     _toc_entries_html,
@@ -1621,9 +1622,18 @@ def _check_para(elements, style="NORMAL_TEXT"):
 
 def test_prose_text_checks_flags_long_sentences_and_mean():
     checks = _prose_text_checks(" ".join(["word"] * 40) + ".")
-    assert _named(checks, "sentences_over_35_words")["value"] == 1
+    assert _named(checks, "sentences_over_35_words")["value"].startswith("1 ")
+    assert _named(checks, "sentences_over_35_words")["status"] == "review"
     assert _named(checks, "sentence_length_mean")["value"] == 40.0
     assert _named(checks, "sentence_length_mean")["status"] == "review"
+
+
+def test_long_sentences_are_budgeted_not_banned():
+    """Sarah signed off on a chapter with 46 of them, so zero would cry wolf."""
+    long_one = " ".join(["word"] * 40) + "."
+    padding = " ".join("A short ordinary sentence here." for _ in range(40))
+    assert _named(_prose_text_checks(long_one + " " + padding),
+                  "sentences_over_35_words")["status"] == "ok"
 
 
 def test_prose_text_checks_mean_within_target_passes():
@@ -1634,7 +1644,8 @@ def test_prose_text_checks_mean_within_target_passes():
 def test_prose_text_checks_em_dash_density_and_nested_asides():
     text = "A sentence — with one aside — and a second clause. " + " ".join(["filler"] * 20)
     checks = _prose_text_checks(text)
-    assert _named(checks, "sentences_with_two_em_dashes")["value"] == 1
+    assert _named(checks, "sentences_with_two_em_dashes")["value"].startswith("1 ")
+    assert _named(checks, "sentences_with_two_em_dashes")["status"] == "review"
     assert _named(checks, "em_dash_density")["status"] == "review"
 
 
@@ -1673,12 +1684,48 @@ def test_italic_spans_merges_adjacent_runs():
     assert _italic_spans(doc) == [(2, "setpoint")]
 
 
-def test_terms_missing_italics_reports_only_unitalicized_first_use():
+def test_parse_terms_reads_bare_terms_and_home_chapters():
+    lines = ["# comment", "", "setpoint = 06", "plain term", "  spaced = 05  "]
+    assert _parse_terms(lines) == [
+        ("setpoint", "06"), ("plain term", None), ("spaced", "05"),
+    ]
+
+
+def test_terms_italics_scope_reports_only_unitalicized_first_use():
     text = "A setpoint and a controller."
     spans = [(2, "setpoint")]
-    missing = _terms_missing_italics(text, spans, ["setpoint", "controller", "absent term"])
+    missing, away = _terms_italics_scope(
+        text, spans, [("setpoint", None), ("controller", None), ("absent term", None)],
+    )
     # setpoint is italic at its first use; controller is not; the third never appears.
     assert missing == ["controller"]
+    assert away == []
+
+
+def test_terms_italics_scope_skips_terms_introduced_in_another_chapter():
+    """The rule is per-book: a borrowed term stays plain outside its home chapter."""
+    text = "A setpoint appears here too."
+    missing, away = _terms_italics_scope(
+        text, [], [("setpoint", "06")], chapter="07",
+    )
+    assert missing == []
+    assert away == []
+
+
+def test_terms_italics_scope_flags_a_borrowed_term_set_in_italics():
+    text = "A setpoint appears here too."
+    missing, away = _terms_italics_scope(
+        text, [(2, "setpoint")], [("setpoint", "06")], chapter="07",
+    )
+    assert away == ["setpoint"]
+
+
+def test_terms_italics_scope_still_checks_a_term_in_its_home_chapter():
+    text = "A setpoint appears here."
+    missing, away = _terms_italics_scope(
+        text, [], [("setpoint", "06")], chapter="06",
+    )
+    assert missing == ["setpoint"]
 
 
 def test_prose_check_flags_term_italicized_only_on_a_later_use():
@@ -1733,7 +1780,9 @@ def test_prose_check_omits_the_terms_check_when_no_list_is_given():
     doc = {"body": {"content": [_check_para([_styled_run("Plain prose.\n")])]}}
     names = [c["check"] for c in _prose_check_from_doc(doc)["checks"]]
     assert "terms_missing_italics_on_first_use" not in names
-    names_with = [c["check"] for c in _prose_check_from_doc(doc, ["prose"])["checks"]]
+    names_with = [
+        c["check"] for c in _prose_check_from_doc(doc, [("prose", None)])["checks"]
+    ]
     assert "terms_missing_italics_on_first_use" in names_with
 
 
@@ -1746,7 +1795,10 @@ def test_prose_check_reports_flagged_count_and_judgement_list():
 
 
 def test_build_parser_prose_check():
-    args = _build_parser().parse_args(["prose-check", "DOC", "--terms", "t.txt"])
+    args = _build_parser().parse_args(
+        ["prose-check", "DOC", "--terms", "t.txt", "--chapter", "07"],
+    )
     assert args.command == "prose-check"
     assert args.doc == "DOC"
     assert args.terms == "t.txt"
+    assert args.chapter == "07"
