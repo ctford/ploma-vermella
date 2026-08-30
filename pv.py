@@ -1304,6 +1304,17 @@ _SPELLED_NUMBERS = (
     "sixty", "seventy", "eighty", "ninety", "hundred", "thousand",
 )
 _FIGURE_CAPTION_RE = re.compile(r"^(Figure\s+(\d+-\d+))\.")
+# Italics carry two jobs: marking a term of art, and stressing a word. Only the
+# first is once-per-book, so the repeat check has to ignore stressed function
+# words — an author may legitimately italicize "and" twice for emphasis.
+_EMPHASIS_WORDS = frozenset({
+    "and", "or", "not", "but", "is", "are", "was", "were", "be", "the", "a", "an",
+    "all", "any", "one", "two", "your", "you", "it", "its", "this", "that", "them",
+    "they", "we", "us", "actual", "actually", "really", "very", "own", "same",
+    "more", "most", "less", "least", "can", "cannot", "must", "should", "would",
+    "always", "never", "every", "each", "before", "after", "why", "how", "what",
+    "who", "when", "where", "which", "some", "none", "both", "either", "neither",
+})
 
 
 def _sentences(text: str) -> list[str]:
@@ -1510,6 +1521,8 @@ def _prose_structure_checks(
         if len(term) < 3 or len(term.split()) > 6:
             continue
         key = term.lower()
+        if key in _EMPHASIS_WORDS:
+            continue
         seen[key] = seen.get(key, 0) + 1
         if seen[key] > 1:
             repeated.append(term)

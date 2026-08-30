@@ -1738,6 +1738,27 @@ def test_prose_check_flags_term_italicized_only_on_a_later_use():
     assert _named(checks, "italics_not_on_first_use")["detail"] == ["damping"]
 
 
+def test_repeated_italics_ignores_stressed_function_words():
+    """Italics mark a term once, but also carry emphasis — "and" may recur."""
+    doc = {"body": {"content": [_check_para([
+        _styled_run("Design "), _styled_run("and", italic=True),
+        _styled_run(" build, not design "), _styled_run("and", italic=True),
+        _styled_run(" hope.\n"),
+    ])]}}
+    checks = _prose_check_from_doc(doc)["checks"]
+    assert _named(checks, "terms_italicized_more_than_once")["value"] == 0
+
+
+def test_repeated_italics_still_flags_a_real_term():
+    doc = {"body": {"content": [_check_para([
+        _styled_run("A "), _styled_run("setpoint", italic=True),
+        _styled_run(" and later another "), _styled_run("setpoint", italic=True),
+        _styled_run(".\n"),
+    ])]}}
+    checks = _prose_check_from_doc(doc)["checks"]
+    assert _named(checks, "terms_italicized_more_than_once")["detail"] == ["setpoint"]
+
+
 def test_prose_check_flags_stacked_headings():
     doc = {"body": {"content": [
         _check_para([_styled_run("Chapter 5. Guides\n")], style="HEADING_1"),
