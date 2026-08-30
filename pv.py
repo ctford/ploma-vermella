@@ -247,6 +247,60 @@ def _outline_from_doc(doc: dict, full: bool = False) -> list[dict]:
     return items
 
 
+_STYLE_SUGGESTION_KEYS = (
+    "suggestedTextStyleChanges",
+    "suggestedParagraphStyleChanges",
+    "suggestedBulletChanges",
+)
+
+
+def _simplify_style_value(value):
+    """Render a text-style property value compactly for reporting.
+
+    Links and colors are nested dicts in the Docs API; a reviewer reading a
+    suggestion list wants the URL or the hex, not the wrapper."""
+    if isinstance(value, dict):
+        if "url" in value:
+            return value["url"]
+        rgb = value.get("color", {}).get("rgbColor")
+        if rgb is not None:
+            return "#%02x%02x%02x" % tuple(
+                round(255 * rgb.get(c, 0)) for c in ("red", "green", "blue")
+            )
+    return value
+
+
+def _text_style_edits(text_run: dict) -> list[dict]:
+    """Suggested text-style changes on one run, as property from→to deltas.
+
+    The run's own textStyle holds the current value; each suggestion's textStyle
+    holds the proposed one. `textStyleSuggestionState` names which properties the
+    suggestion actually touches, as `<property>Suggested` flags."""
+    changes = text_run.get("suggestedTextStyleChanges") or {}
+    current = text_run.get("textStyle", {})
+    edits = []
+    for sug_id, change in changes.items():
+        proposed = change.get("textStyle", {})
+        state = change.get("textStyleSuggestionState", {})
+        props = []
+        for flag, touched in state.items():
+            if touched is not True or not flag.endswith("Suggested"):
+                continue
+            name = flag[: -len("Suggested")]
+            props.append({
+                "property": name,
+                "from": _simplify_style_value(current.get(name)),
+                "to": _simplify_style_value(proposed.get(name)),
+            })
+        if props:
+            edits.append({
+                "id": sug_id,
+                "text": text_run.get("content", "").strip(),
+                "changes": sorted(props, key=lambda c: c["property"]),
+            })
+    return edits
+
+
 def _suggestions_from_doc(doc: dict) -> dict:
     """Extract a doc's suggested edits (Docs suggestion mode) as per-paragraph deltas.
 
@@ -257,16 +311,26 @@ def _suggestions_from_doc(doc: dict) -> dict:
       - after:   the text if every suggestion is accepted (insertions kept, deletions removed)
       - marked:  an inline diff — insertions wrapped {+like this+}, deletions [-like this-]
       - style_change: suggestion IDs for any suggested paragraph-style change on the paragraph
+      - text_style_edits: suggested character-formatting changes (italic, link, color …) on
+        the paragraph's runs, as property from→to deltas
 
     Paragraph breaks inside a suggested span render as ¶ in `marked`, so suggested
     splits and joins stay visible. Walks into table cells in reading order. A run
     marked for deletion is treated as "before" text even if it also carries an
     insertion ID (a suggested replacement of that run).
+
+    `total_suggestion_count` is the number of *distinct* suggestion IDs, which is what
+    the Docs UI reports. It is not insertion_count + deletion_count: a replacement is
+    one suggestion whose ID sits on both the deleted and the inserted run, so those two
+    buckets overlap. Style-only suggestions carry no text change at all and would
+    otherwise be invisible — on a real chapter they can be a sixth of the total.
     """
     paragraphs: list[dict] = []
     insertion_ids: set[str] = set()
     deletion_ids: set[str] = set()
     style_ids: set[str] = set()
+    text_style_ids: set[str] = set()
+    bullet_ids: set[str] = set()
 
     def visit(content: list[dict]) -> None:
         for el in content:
@@ -280,10 +344,17 @@ def _suggestions_from_doc(doc: dict) -> dict:
             if paragraph is None:
                 continue
             before_parts, after_parts, marked_parts = [], [], []
+            style_edits: list[dict] = []
             changed = False
             for pe in paragraph.get("elements", []):
                 text_run = pe.get("textRun")
                 if text_run is None:
+                    # Inline objects, footnote refs and breaks carry suggestion IDs too;
+                    # they contribute no text, but they do count.
+                    for value in pe.values():
+                        if isinstance(value, dict):
+                            insertion_ids.update(value.get("suggestedInsertionIds") or [])
+                            deletion_ids.update(value.get("suggestedDeletionIds") or [])
                     continue
                 text = text_run.get("content", "")
                 inserted = text_run.get("suggestedInsertionIds")
@@ -292,6 +363,10 @@ def _suggestions_from_doc(doc: dict) -> dict:
                     insertion_ids.update(inserted)
                 if deleted:
                     deletion_ids.update(deleted)
+                edits = _text_style_edits(text_run)
+                if edits:
+                    style_edits.extend(edits)
+                    text_style_ids.update(e["id"] for e in edits)
                 if deleted:
                     before_parts.append(text)
                     marked_parts.append("[-" + text.replace("\n", "¶") + "-]")
@@ -306,20 +381,28 @@ def _suggestions_from_doc(doc: dict) -> dict:
                     marked_parts.append(text)
             style_change = list(paragraph.get("suggestedParagraphStyleChanges", {}).keys())
             style_ids.update(style_change)
-            if changed or style_change:
+            bullet_change = list(paragraph.get("suggestedBulletChanges", {}).keys())
+            bullet_ids.update(bullet_change)
+            if changed or style_change or style_edits or bullet_change:
                 paragraphs.append({
                     "before": "".join(before_parts).strip(),
                     "after": "".join(after_parts).strip(),
                     "marked": "".join(marked_parts).strip(),
                     "style_change": style_change,
+                    "bullet_change": bullet_change,
+                    "text_style_edits": style_edits,
                 })
 
     visit(doc.get("body", {}).get("content", []))
+    every_id = insertion_ids | deletion_ids | style_ids | text_style_ids | bullet_ids
     return {
         "title": doc.get("title", ""),
         "insertion_count": len(insertion_ids),
         "deletion_count": len(deletion_ids),
         "paragraph_style_change_count": len(style_ids),
+        "text_style_change_count": len(text_style_ids),
+        "bullet_change_count": len(bullet_ids),
+        "total_suggestion_count": len(every_id),
         "changed_paragraphs": len(paragraphs),
         "paragraphs": paragraphs,
     }
@@ -3640,7 +3723,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_suggestions = sub.add_parser(
         "suggestions",
-        help="List a doc's suggested edits (suggestion mode) as per-paragraph before→after deltas.",
+        help="List a doc's suggested edits (text and style) as per-paragraph before→after deltas.",
     )
     p_suggestions.add_argument("doc", metavar="DOC_URL")
 

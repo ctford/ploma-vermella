@@ -1114,6 +1114,39 @@ SUGGESTIONS_DOC = {
                 "elements": [_suggested_run("Restyled heading\n")],
                 "suggestedParagraphStyleChanges": {"sug.d": {}},
             }},
+            # Style-only: italicize a term as a term, and relink an attribution.
+            # Neither run carries an insertion or deletion, so a text-only diff
+            # misses both entirely.
+            {"paragraph": {"elements": [
+                {"textRun": {
+                    "content": "setpoint",
+                    "textStyle": {},
+                    "suggestedTextStyleChanges": {"sug.e": {
+                        "textStyle": {"italic": True},
+                        "textStyleSuggestionState": {"italicSuggested": True},
+                    }},
+                }},
+                {"textRun": {
+                    "content": " describes",
+                    "textStyle": {"link": {"url": "https://old.example/x"}},
+                    "suggestedTextStyleChanges": {"sug.f": {
+                        "textStyle": {
+                            "link": {"url": "https://new.example/y"},
+                            "foregroundColor": {"color": {"rgbColor": {
+                                "red": 0.06666667, "green": 0.33333334, "blue": 0.8,
+                            }}},
+                        },
+                        "textStyleSuggestionState": {
+                            "linkSuggested": True, "foregroundColorSuggested": True,
+                        },
+                    }},
+                }},
+                _suggested_run(" the loop.\n"),
+            ]}},
+            {"paragraph": {
+                "elements": [_suggested_run("Rebulleted item\n")],
+                "suggestedBulletChanges": {"sug.g": {}},
+            }},
         ]
     },
 }
@@ -1121,8 +1154,8 @@ SUGGESTIONS_DOC = {
 
 def test_suggestions_reports_only_changed_paragraphs():
     result = _suggestions_from_doc(SUGGESTIONS_DOC)
-    # Untouched paragraph is excluded; the other four carry suggestions.
-    assert result["changed_paragraphs"] == 4
+    # Untouched paragraph is excluded; the other six carry suggestions.
+    assert result["changed_paragraphs"] == 6
     assert all("Untouched" not in p["before"] for p in result["paragraphs"])
 
 
@@ -1156,10 +1189,50 @@ def test_suggestions_counts_and_style_changes():
     assert styled["style_change"] == ["sug.d"]
 
 
+def test_suggestions_total_is_distinct_ids_not_the_sum():
+    """A replacement is one suggestion spanning a deleted and an inserted run.
+
+    sug.b sits in both buckets, so insertion_count + deletion_count double-counts it.
+    Distinct IDs: a, b, c, d, e, f, g."""
+    result = _suggestions_from_doc(SUGGESTIONS_DOC)
+    assert result["insertion_count"] + result["deletion_count"] == 4
+    assert result["total_suggestion_count"] == 7
+
+
+def test_suggestions_reports_style_only_paragraphs():
+    """A run can carry formatting suggestions with no text change at all."""
+    result = _suggestions_from_doc(SUGGESTIONS_DOC)
+    para = next(p for p in result["paragraphs"] if p["before"].startswith("setpoint"))
+    # No text moved, so before and after match.
+    assert para["before"] == para["after"] == "setpoint describes the loop."
+    assert [e["text"] for e in para["text_style_edits"]] == ["setpoint", "describes"]
+    assert result["text_style_change_count"] == 2  # sug.e, sug.f
+
+
+def test_suggestions_text_style_edit_reports_property_deltas():
+    result = _suggestions_from_doc(SUGGESTIONS_DOC)
+    para = next(p for p in result["paragraphs"] if p["before"].startswith("setpoint"))
+    italic, relink = para["text_style_edits"]
+    assert italic["changes"] == [{"property": "italic", "from": None, "to": True}]
+    # Links and colors are flattened to the URL and a hex code.
+    assert relink["changes"] == [
+        {"property": "foregroundColor", "from": None, "to": "#1155cc"},
+        {"property": "link", "from": "https://old.example/x", "to": "https://new.example/y"},
+    ]
+
+
+def test_suggestions_reports_bullet_changes():
+    result = _suggestions_from_doc(SUGGESTIONS_DOC)
+    para = next(p for p in result["paragraphs"] if p["before"] == "Rebulleted item")
+    assert para["bullet_change"] == ["sug.g"]
+    assert result["bullet_change_count"] == 1
+
+
 def test_suggestions_empty_doc_has_no_paragraphs():
     result = _suggestions_from_doc({})
     assert result["changed_paragraphs"] == 0
     assert result["paragraphs"] == []
+    assert result["total_suggestion_count"] == 0
 
 
 def test_build_parser_suggestions():

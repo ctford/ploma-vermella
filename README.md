@@ -66,6 +66,7 @@ pv sheet-update <sheet-url> <range> ...     # write sheet rows from JSON
 pv figure-map <doc-url>                     # inspect image neighborhoods in a doc
 pv outline <doc-url> [--full]               # structural map: headings + images, with indices
 pv suggestions <doc-url>                    # list an editor's suggested edits as before→after deltas
+                                            # (includes style-only suggestions: italics, links, bullets)
 pv replace-block <doc-url> <start> <end> ... # replace an inclusive body-element range safely
                                              # (keeps the replaced block's paragraph style)
 pv replace-section <doc-url> <heading> <text> # replace a heading's body up to the next heading
