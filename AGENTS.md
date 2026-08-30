@@ -57,7 +57,8 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
 .venv/bin/pv sheet-fetch <sheet-url> [--range A1...]   # read sheet metadata or rows
 .venv/bin/pv sheet-update <sheet-url> <range> <json>   # write rows to a sheet range
 .venv/bin/pv figure-map <doc-url>                      # list image neighborhoods in a doc
-.venv/bin/pv replace-block <doc-url> <start> <end> ... # replace one body-element block
+.venv/bin/pv replace-block <doc-url> <start> <end> ... # replace an inclusive body-element range
+                                                       # (the replacement keeps the replaced block's paragraph style)
 .venv/bin/pv insert-image <doc-url> <body-index> ...   # insert an inline image
 .venv/bin/pv replace-image <doc-url> <caption> <deck-url> <slide-id>  # re-export a figure from a slide thumbnail
 .venv/bin/pv place-figure <doc-url> <anchor> <deck-url> <slide-id> --caption ...  # insert a centered figure + caption after an anchor

@@ -60,6 +60,7 @@ from pv import (
     _place_figure_requests,
     _plan_edit_matches,
     _preceding_image_id,
+    _replace_body_range_plan,
     _replace_image_plan,
     _replace_section_plan,
     _review_copy_title,
@@ -1443,6 +1444,70 @@ def test_replace_section_plan_only_matches_headings():
     plan = _replace_section_plan(SECTION_DOC, "Old alpha", "x")
     assert plan["kind"] == "ambiguous"
     assert plan["result"]["reason"] == "no_match"
+
+
+# ---------------------------------------------------------------------------
+# pv replace-block
+# ---------------------------------------------------------------------------
+RANGE_DOC = {"body": {"content": [
+    {"startIndex": 0, "endIndex": 1, "sectionBreak": {}},
+    _ol_para("Title\n", "TITLE", 1, 7),
+    _ol_para("Old opener.\n", "NORMAL_TEXT", 7, 19),
+    _ol_para("More opener.\n", "NORMAL_TEXT", 19, 32),
+    _ol_para("Heading\n", "HEADING_1", 32, 40),
+    _ol_para("Body.\n", "NORMAL_TEXT", 40, 46),
+]}}
+
+
+def test_replace_body_range_plan_appends_trailing_newline():
+    # Without this the last new paragraph merges into the paragraph that follows.
+    plan = _replace_body_range_plan(RANGE_DOC, 2, 3, "New opener.")
+    assert plan["insert_text"] == "New opener.\n"
+    delete, insert, _style = plan["requests"]
+    assert delete["deleteContentRange"]["range"] == {"startIndex": 7, "endIndex": 32}
+    assert insert["insertText"]["location"]["index"] == 7
+
+
+def test_replace_body_range_plan_keeps_existing_trailing_newline():
+    plan = _replace_body_range_plan(RANGE_DOC, 2, 3, "One.\n\nTwo.\n")
+    assert plan["insert_text"] == "One.\n\nTwo.\n"
+
+
+def test_replace_body_range_plan_reapplies_replaced_block_style():
+    # The insert lands at the start of the HEADING_1 that follows, so the new
+    # paragraphs would inherit HEADING_1 without this.
+    plan = _replace_body_range_plan(RANGE_DOC, 2, 3, "New opener.")
+    style = plan["requests"][2]["updateParagraphStyle"]
+    assert style["paragraphStyle"]["namedStyleType"] == "NORMAL_TEXT"
+    assert style["range"] == {"startIndex": 7, "endIndex": 7 + len("New opener.\n")}
+
+
+def test_replace_body_range_plan_preserves_a_replaced_heading_style():
+    plan = _replace_body_range_plan(RANGE_DOC, 4, 4, "New heading")
+    style = plan["requests"][2]["updateParagraphStyle"]
+    assert style["paragraphStyle"]["namedStyleType"] == "HEADING_1"
+
+
+def test_replace_body_range_plan_delete_only_emits_no_insert():
+    plan = _replace_body_range_plan(RANGE_DOC, 2, 2, "")
+    assert plan["insert_text"] == ""
+    assert len(plan["requests"]) == 1
+
+
+def test_replace_body_range_plan_at_end_preserves_final_newline():
+    plan = _replace_body_range_plan(RANGE_DOC, 5, 5, "Last.")
+    assert plan["insert_text"] == "Last."
+    assert plan["requests"][0]["deleteContentRange"]["range"]["endIndex"] == 45
+
+
+def test_replace_body_range_plan_rejects_out_of_range():
+    with pytest.raises(ValueError):
+        _replace_body_range_plan(RANGE_DOC, 2, 99, "x")
+
+
+def test_build_parser_replace_block():
+    a = _build_parser().parse_args(["replace-block", "DOC", "2", "5", "text"])
+    assert a.command == "replace-block" and a.start_body_index == 2
 
 
 def test_build_parser_replace_section():

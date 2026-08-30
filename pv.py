@@ -2057,6 +2057,62 @@ def replace_section(doc_id_or_url: str, heading_anchor: str, text: str) -> dict:
     }
 
 
+def _replace_body_range_plan(
+    doc: dict, start_body_index: int, end_body_index: int, text: str,
+) -> dict:
+    """Plan replacing body elements [start, end] (inclusive) with `text`.
+
+    Two details the raw delete-then-insert gets wrong on its own:
+
+    * The insert lands at the start of whatever *follows* the deleted range, so
+      without a trailing newline the last new paragraph merges into it. One is
+      appended unless the range runs to the end of the document.
+    * Paragraphs created by that insert inherit the following paragraph's style,
+      turning replacement prose into a heading when the range abuts one. The
+      replaced block's own style is reapplied instead, so replacing prose keeps
+      prose and replacing a heading keeps that heading.
+
+    Returns {"kind": "ok", "requests", "insert_text"}.
+    """
+    content = doc.get("body", {}).get("content", [])
+    if start_body_index < 0 or end_body_index < start_body_index:
+        raise ValueError("invalid body index range")
+    if end_body_index >= len(content):
+        raise ValueError(f"body index {end_body_index} out of range")
+
+    start_index = content[start_body_index].get("startIndex")
+    end_index = content[end_body_index].get("endIndex")
+    at_end = end_body_index == len(content) - 1
+    insert_text = text
+    if insert_text and not at_end and not insert_text.endswith("\n"):
+        insert_text += "\n"
+    if at_end:
+        # Deleting the document's final newline is rejected by the API.
+        end_index = max(end_index - 1, start_index)
+
+    requests = [{"deleteContentRange": {
+        "range": {"startIndex": start_index, "endIndex": end_index},
+    }}]
+    if insert_text:
+        requests.append({
+            "insertText": {"location": {"index": start_index}, "text": insert_text}
+        })
+        style = (
+            content[start_body_index].get("paragraph", {})
+            .get("paragraphStyle", {}).get("namedStyleType")
+        )
+        if style:
+            requests.append({"updateParagraphStyle": {
+                "range": {
+                    "startIndex": start_index,
+                    "endIndex": start_index + _utf16_len(insert_text),
+                },
+                "paragraphStyle": {"namedStyleType": style},
+                "fields": "namedStyleType",
+            }})
+    return {"kind": "ok", "requests": requests, "insert_text": insert_text}
+
+
 def replace_body_range(
     doc_id_or_url: str,
     start_body_index: int,
@@ -2067,36 +2123,21 @@ def replace_body_range(
     Replace a contiguous body-element range with text.
 
     Body indexes are looked up fresh at execution time, which is safer than
-    carrying raw document indices across multiple edits.
+    carrying raw document indices across multiple edits. The replacement takes
+    the paragraph style of the block it replaces.
     """
     doc_id = _extract_doc_id(doc_id_or_url)
     doc = _docs_service().documents().get(documentId=doc_id).execute()
-    content = doc.get("body", {}).get("content", [])
-    if start_body_index < 0 or end_body_index < start_body_index:
-        raise ValueError("invalid body index range")
-    if end_body_index >= len(content):
-        raise ValueError(f"body index {end_body_index} out of range")
-
-    start_index = content[start_body_index].get("startIndex")
-    end_index = content[end_body_index].get("endIndex")
-    requests = [{
-        "deleteContentRange": {
-            "range": {"startIndex": start_index, "endIndex": end_index}
-        }
-    }]
-    if text:
-        requests.append({
-            "insertText": {"location": {"index": start_index}, "text": text}
-        })
+    plan = _replace_body_range_plan(doc, start_body_index, end_body_index, text)
     _docs_service().documents().batchUpdate(
         documentId=doc_id,
-        body={"requests": requests},
+        body={"requests": plan["requests"]},
     ).execute()
     return {
         "status": "replaced",
         "start_body_index": start_body_index,
         "end_body_index": end_body_index,
-        "text": text,
+        "text": plan["insert_text"],
     }
 
 
