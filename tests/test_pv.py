@@ -45,6 +45,7 @@ from pv import (
     _is_code_paragraph,
     _is_image_paragraph,
     _is_table_separator,
+    _italic_spans,
     _link_plan,
     _map_comments,
     _media_extension,
@@ -60,6 +61,8 @@ from pv import (
     _place_figure_requests,
     _plan_edit_matches,
     _preceding_image_id,
+    _prose_check_from_doc,
+    _prose_text_checks,
     _replace_body_range_plan,
     _replace_image_plan,
     _replace_section_plan,
@@ -68,6 +71,7 @@ from pv import (
     _slugify,
     _style_plan,
     _suggestions_from_doc,
+    _terms_missing_italics,
     _text_from_elements,
     _title_page_xhtml,
     _toc_entries_html,
@@ -1592,3 +1596,157 @@ def test_build_parser_no_command_allowed():
     # Bare `pv` must parse (command None) so main() can print help, not error out.
     args = _build_parser().parse_args([])
     assert args.command is None
+
+
+# ---------------------------------------------------------------------------
+# _prose_check_from_doc / pv prose-check
+# ---------------------------------------------------------------------------
+
+def _named(check_list, name):
+    return next(c for c in check_list if c["check"] == name)
+
+
+def _styled_run(text, italic=False):
+    run = {"textRun": {"content": text, "textStyle": {}}}
+    if italic:
+        run["textRun"]["textStyle"]["italic"] = True
+    return run
+
+
+def _check_para(elements, style="NORMAL_TEXT"):
+    return {"paragraph": {
+        "elements": elements, "paragraphStyle": {"namedStyleType": style},
+    }}
+
+
+def test_prose_text_checks_flags_long_sentences_and_mean():
+    checks = _prose_text_checks(" ".join(["word"] * 40) + ".")
+    assert _named(checks, "sentences_over_35_words")["value"] == 1
+    assert _named(checks, "sentence_length_mean")["value"] == 40.0
+    assert _named(checks, "sentence_length_mean")["status"] == "review"
+
+
+def test_prose_text_checks_mean_within_target_passes():
+    text = " ".join("A sentence of about eleven plain ordinary words here." for _ in range(5))
+    assert _named(_prose_text_checks(text), "sentence_length_mean")["status"] == "ok"
+
+
+def test_prose_text_checks_em_dash_density_and_nested_asides():
+    text = "A sentence — with one aside — and a second clause. " + " ".join(["filler"] * 20)
+    checks = _prose_text_checks(text)
+    assert _named(checks, "sentences_with_two_em_dashes")["value"] == 1
+    assert _named(checks, "em_dash_density")["status"] == "review"
+
+
+def test_prose_text_checks_em_dash_density_ok_when_sparse():
+    text = " ".join(["word"] * 400) + " — one aside."
+    assert _named(_prose_text_checks(text), "em_dash_density")["status"] == "ok"
+
+
+def test_prose_text_checks_finds_passives_tics_and_uk_forms():
+    text = "The report was written in order to explain the artefact."
+    checks = _prose_text_checks(text)
+    assert _named(checks, "passive_constructions")["value"] == 1
+    assert "in order tox1" in _named(checks, "tic_phrases")["detail"]
+    assert "artefactx1" in _named(checks, "uk_spellings")["detail"]
+
+
+def test_prose_text_checks_acronyms_skip_the_assumed_list():
+    checks = _prose_text_checks("The API and the LLM talk to the VPC over OIDC.")
+    detail = _named(checks, "acronyms_to_verify")["detail"]
+    assert detail == ["OIDC", "VPC"]
+
+
+def test_prose_text_checks_spelled_numbers_and_double_spaces():
+    checks = _prose_text_checks("It ran for twenty years.  Then it stopped.")
+    assert _named(checks, "spelled_numbers_over_nine")["detail"] == ["twenty"]
+    assert _named(checks, "double_spaces")["value"] == 1
+
+
+def test_italic_spans_merges_adjacent_runs():
+    doc = {"body": {"content": [_check_para([
+        _styled_run("A "),
+        _styled_run("set", italic=True),
+        _styled_run("point", italic=True),
+        _styled_run(" is a target.\n"),
+    ])]}}
+    assert _italic_spans(doc) == [(2, "setpoint")]
+
+
+def test_terms_missing_italics_reports_only_unitalicized_first_use():
+    text = "A setpoint and a controller."
+    spans = [(2, "setpoint")]
+    missing = _terms_missing_italics(text, spans, ["setpoint", "controller", "absent term"])
+    # setpoint is italic at its first use; controller is not; the third never appears.
+    assert missing == ["controller"]
+
+
+def test_prose_check_flags_term_italicized_only_on_a_later_use():
+    doc = {"body": {"content": [_check_para([
+        _styled_run("The damping idea matters. Later we call it "),
+        _styled_run("damping", italic=True),
+        _styled_run(" again.\n"),
+    ])]}}
+    checks = _prose_check_from_doc(doc)["checks"]
+    assert _named(checks, "italics_not_on_first_use")["detail"] == ["damping"]
+
+
+def test_prose_check_flags_stacked_headings():
+    doc = {"body": {"content": [
+        _check_para([_styled_run("Chapter 5. Guides\n")], style="HEADING_1"),
+        _check_para([_styled_run("Guides\n")], style="HEADING_2"),
+        _check_para([_styled_run("Body text at last.\n")]),
+    ]}}
+    checks = _prose_check_from_doc(doc)["checks"]
+    assert _named(checks, "headings_with_no_body_between")["value"] == 1
+
+
+def test_prose_check_accepts_a_heading_followed_by_body():
+    doc = {"body": {"content": [
+        _check_para([_styled_run("Guides\n")], style="HEADING_2"),
+        _check_para([_styled_run("Body text.\n")]),
+        _check_para([_styled_run("Guards\n")], style="HEADING_2"),
+    ]}}
+    checks = _prose_check_from_doc(doc)["checks"]
+    assert _named(checks, "headings_with_no_body_between")["status"] == "ok"
+
+
+def test_prose_check_flags_figure_caption_with_no_earlier_reference():
+    doc = {"body": {"content": [
+        _check_para([_styled_run("Some lead-in prose with no pointer.\n")]),
+        _check_para([_styled_run("Figure 5-1. The harness quadrant.\n")]),
+    ]}}
+    checks = _prose_check_from_doc(doc)["checks"]
+    assert _named(checks, "figures_not_referenced_before_caption")["detail"] == ["Figure 5-1"]
+
+
+def test_prose_check_accepts_figure_referenced_before_its_caption():
+    doc = {"body": {"content": [
+        _check_para([_styled_run("The quadrant is shown in Figure 5-1.\n")]),
+        _check_para([_styled_run("Figure 5-1. The harness quadrant.\n")]),
+    ]}}
+    checks = _prose_check_from_doc(doc)["checks"]
+    assert _named(checks, "figures_not_referenced_before_caption")["status"] == "ok"
+
+
+def test_prose_check_omits_the_terms_check_when_no_list_is_given():
+    doc = {"body": {"content": [_check_para([_styled_run("Plain prose.\n")])]}}
+    names = [c["check"] for c in _prose_check_from_doc(doc)["checks"]]
+    assert "terms_missing_italics_on_first_use" not in names
+    names_with = [c["check"] for c in _prose_check_from_doc(doc, ["prose"])["checks"]]
+    assert "terms_missing_italics_on_first_use" in names_with
+
+
+def test_prose_check_reports_flagged_count_and_judgement_list():
+    doc = {"body": {"content": [_check_para([_styled_run("The artefact was written.\n")])]}}
+    result = _prose_check_from_doc(doc)
+    assert result["flagged"] == sum(1 for c in result["checks"] if c["status"] == "review")
+    assert result["flagged"] > 0
+    assert any("citation" in item for item in result["needs_a_reader"])
+
+
+def test_build_parser_prose_check():
+    args = _build_parser().parse_args(["prose-check", "DOC", "--terms", "t.txt"])
+    assert args.command == "prose-check"
+    assert args.doc == "DOC"
+    assert args.terms == "t.txt"

@@ -1259,6 +1259,288 @@ def _render_table(table: dict) -> str:
     return "".join(line + "\n" for line in lines)
 
 
+# ---------------------------------------------------------------------------
+# pv prose-check — mechanical style sweep
+#
+# Targets are Sarah Grey's measured landing zones from her edits to Chapters 5,
+# 6 and 8 of Agentic Engineering at Scale. Text checks look at characters;
+# structure checks need the Docs API, because roughly half the highest-volume
+# corrections (italics, caption placement, link spans) are invisible in plain
+# text. Judgement checks — citations, verbatim quotes, metaphors — are not here
+# on purpose; they need a reader, not a regex.
+# ---------------------------------------------------------------------------
+
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+_LONG_SENTENCE_WORDS = 35
+_SENTENCE_MEAN_TARGET = (20.0, 24.0)
+_EM_DASH_WORDS_PER = 150
+
+_PASSIVE_RE = re.compile(
+    r"\b(?:is|are|was|were|be|been|being)\s+(?:\w+ly\s+)?\w+(?:ed|en)\b", re.I
+)
+_ACRONYM_RE = re.compile(r"\b[A-Z]{2,}s?\b")
+_ASSUMED_ACRONYMS = frozenset({"API", "LLM", "US", "UK", "AI", "IT", "OK"})
+
+_TIC_PHRASES = (
+    "in order to", "the fact that", "able to", "the extent to which",
+    "the ability of", "e.g.", "i.e.", " vs ", " vs.",
+)
+_UK_FORMS = (
+    "artefact", "organisation", "judgement", "behaviour", "generalisation",
+    "optimise", "customise", "analyse", "realise", "recognise", "destabilise",
+    "towards", "traveller", "licence", "cancelled", "amongst", "whilst",
+    "modelling", "labelled",
+)
+_SPELLED_NUMBERS = (
+    "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+    "seventeen", "eighteen", "nineteen", "twenty", "thirty", "forty", "fifty",
+    "sixty", "seventy", "eighty", "ninety", "hundred", "thousand",
+)
+_FIGURE_CAPTION_RE = re.compile(r"^(Figure\s+(\d+-\d+))\.")
+
+
+def _sentences(text: str) -> list[str]:
+    """Split prose into sentences. Crude but stable — good enough to count."""
+    return [s for s in _SENTENCE_SPLIT.split(text) if s.strip()]
+
+
+def _check(name: str, status: str, value, target, detail=None) -> dict:
+    return {
+        "check": name, "status": status, "value": value,
+        "target": target, "detail": detail or [],
+    }
+
+
+def _prose_text_checks(text: str) -> list[dict]:
+    """Character-level checks: length, density, and greppable house style."""
+    sentences = _sentences(text)
+    words = text.split()
+    word_count = len(words)
+    checks = []
+
+    mean = word_count / len(sentences) if sentences else 0.0
+    low, high = _SENTENCE_MEAN_TARGET
+    checks.append(_check(
+        "sentence_length_mean", "ok" if mean <= high else "review",
+        round(mean, 1), f"{low:.0f}-{high:.0f} words",
+    ))
+
+    long_sentences = [s for s in sentences if len(s.split()) > _LONG_SENTENCE_WORDS]
+    checks.append(_check(
+        "sentences_over_35_words", "ok" if not long_sentences else "review",
+        len(long_sentences), "as few as possible; each is a split candidate",
+        [s[:120] for s in long_sentences[:5]],
+    ))
+
+    em_dashes = text.count("—")
+    per = word_count // em_dashes if em_dashes else 0
+    checks.append(_check(
+        "em_dash_density", "ok" if em_dashes == 0 or per >= _EM_DASH_WORDS_PER else "review",
+        f"{em_dashes} total, 1 per {per} words" if em_dashes else "0",
+        f"1 per {_EM_DASH_WORDS_PER}-200 words",
+    ))
+
+    nested = [s for s in sentences if s.count("—") >= 2]
+    checks.append(_check(
+        "sentences_with_two_em_dashes", "ok" if not nested else "review",
+        len(nested), "0 — the nested aside is always removed",
+        [s[:120] for s in nested[:5]],
+    ))
+
+    passives = _PASSIVE_RE.findall(text)
+    checks.append(_check(
+        "passive_constructions", "ok" if not passives else "review",
+        len(passives), "trend down; the regex over-matches, so eyeball each",
+    ))
+
+    acronyms = sorted({
+        a for a in _ACRONYM_RE.findall(text)
+        if a.rstrip("s").upper() not in _ASSUMED_ACRONYMS
+    })
+    checks.append(_check(
+        "acronyms_to_verify", "ok" if not acronyms else "review",
+        len(acronyms), "each spelled out on first use", acronyms,
+    ))
+
+    lowered = text.lower()
+    for name, needles in (("tic_phrases", _TIC_PHRASES), ("uk_spellings", _UK_FORMS)):
+        found = [f"{n.strip()}x{lowered.count(n)}" for n in needles if lowered.count(n)]
+        checks.append(_check(name, "ok" if not found else "review", len(found), "0", found))
+
+    doubles = len(re.findall(r"[^\n] {2,}", text))
+    checks.append(_check(
+        "double_spaces", "ok" if not doubles else "review", doubles,
+        "0 outside code paragraphs",
+    ))
+
+    spelled = sorted({
+        n for n in _SPELLED_NUMBERS if re.search(rf"\b{n}\b", lowered)
+    })
+    checks.append(_check(
+        "spelled_numbers_over_nine", "ok" if not spelled else "review",
+        len(spelled), "0 — numerals for 10 and up", spelled,
+    ))
+    return checks
+
+
+def _italic_spans(doc: dict) -> list[tuple[int, str]]:
+    """Italic text spans in reading order, as (start offset in flat text, text).
+
+    Adjacent italic runs are merged so a term split across runs reads as one span.
+    """
+    spans: list[tuple[int, str]] = []
+    pos = 0
+    pending_start, pending_text = None, ""
+    for element in doc.get("body", {}).get("content", []):
+        paragraph = element.get("paragraph")
+        if not paragraph:
+            continue
+        for pe in paragraph.get("elements", []):
+            run = pe.get("textRun")
+            if run is None:
+                continue
+            content = run.get("content", "")
+            if run.get("textStyle", {}).get("italic"):
+                if pending_start is None:
+                    pending_start = pos
+                pending_text += content
+            else:
+                if pending_start is not None:
+                    spans.append((pending_start, pending_text))
+                    pending_start, pending_text = None, ""
+            pos += len(content)
+    if pending_start is not None:
+        spans.append((pending_start, pending_text))
+    return spans
+
+
+def _terms_missing_italics(text: str, spans: list[tuple[int, str]], terms: list[str]) -> list[str]:
+    """Book terms whose first appearance isn't italicized.
+
+    This is the check that catches the bulk of an editor's formatting pass: a term
+    of art is italicized the first time it appears. Without a term list it can't be
+    seen at all, since "should this word be italic?" isn't visible in the text.
+    """
+    italic_at = {start for start, _ in spans}
+    italic_ranges = [(start, start + len(raw)) for start, raw in spans]
+    missing = []
+    lowered = text.lower()
+    for term in terms:
+        key = term.strip().lower()
+        if not key:
+            continue
+        match = re.search(rf"\b{re.escape(key)}\b", lowered)
+        if match is None:
+            continue
+        at = match.start()
+        if at in italic_at or any(lo <= at < hi for lo, hi in italic_ranges):
+            continue
+        missing.append(term.strip())
+    return missing
+
+
+def _prose_structure_checks(doc: dict, text: str, terms: list[str] | None = None) -> list[dict]:
+    """Checks that need the document structure, not just its characters."""
+    checks = []
+
+    spans = _italic_spans(doc)
+    if terms:
+        missing = _terms_missing_italics(text, spans, terms)
+        checks.append(_check(
+            "terms_missing_italics_on_first_use", "ok" if not missing else "review",
+            len(missing), "0 — italicize a term of art the first time it appears",
+            sorted(missing)[:30],
+        ))
+
+    late, repeated = [], []
+    seen: dict[str, int] = {}
+    for start, raw in spans:
+        term = raw.strip().strip(".,;:!?()[]“”‘’")
+        if len(term) < 3 or len(term.split()) > 6:
+            continue
+        key = term.lower()
+        seen[key] = seen.get(key, 0) + 1
+        if seen[key] > 1:
+            repeated.append(term)
+            continue
+        earlier = text[:start].lower()
+        if re.search(rf"\b{re.escape(key)}\b", earlier):
+            late.append(term)
+    checks.append(_check(
+        "italics_not_on_first_use", "ok" if not late else "review", len(late),
+        "0 — a term is italicized the first time it appears, not later",
+        sorted(set(late))[:20],
+    ))
+    checks.append(_check(
+        "terms_italicized_more_than_once", "ok" if not repeated else "review",
+        len(repeated), "0 — first use only; later uses are plain",
+        sorted(set(repeated))[:20],
+    ))
+
+    jumps = []
+    previous_heading = None
+    for element in doc.get("body", {}).get("content", []):
+        paragraph = element.get("paragraph")
+        if not paragraph:
+            continue
+        style = paragraph.get("paragraphStyle", {}).get("namedStyleType", "NORMAL_TEXT")
+        body_text = _text_from_elements(paragraph.get("elements", [])).strip()
+        if not body_text:
+            continue
+        if _heading_rank(style) < 99:
+            if previous_heading is not None:
+                jumps.append(f"{previous_heading} -> {body_text}")
+            previous_heading = body_text
+        else:
+            previous_heading = None
+    checks.append(_check(
+        "headings_with_no_body_between", "ok" if not jumps else "review",
+        len(jumps), "0 — never stack two headings", jumps[:10],
+    ))
+
+    unreferenced = []
+    for element in doc.get("body", {}).get("content", []):
+        paragraph = element.get("paragraph")
+        if not paragraph:
+            continue
+        body_text = _text_from_elements(paragraph.get("elements", [])).strip()
+        match = _FIGURE_CAPTION_RE.match(body_text)
+        if not match:
+            continue
+        label = match.group(1)
+        caption_at = text.find(body_text[:40])
+        before = text[:caption_at] if caption_at > 0 else ""
+        if label not in before:
+            unreferenced.append(label)
+    checks.append(_check(
+        "figures_not_referenced_before_caption", "ok" if not unreferenced else "review",
+        len(unreferenced), "0 — reference the figure in the body before it appears",
+        unreferenced[:10],
+    ))
+    return checks
+
+
+def _prose_check_from_doc(doc: dict, terms: list[str] | None = None) -> dict:
+    """Run the mechanical half of the pre-submission sweep over a document."""
+    text = _extract_text(doc)
+    checks = _prose_text_checks(text) + _prose_structure_checks(doc, text, terms)
+    return {
+        "title": doc.get("title", ""),
+        "word_count": len(text.split()),
+        "flagged": sum(1 for c in checks if c["status"] == "review"),
+        "checks": checks,
+        "needs_a_reader": [
+            "every named attribution carries a citation, re-cited per chapter",
+            "anything in quotation marks is verbatim",
+            "each term of art is glossed on first use",
+            "figures survive grayscale and are licensed",
+            "one metaphor per passage",
+            "chapter opens with a hook and closes with a tease",
+            "no outline residue left as prose",
+        ],
+    }
+
+
 def _extract_text(doc: dict) -> str:
     """Extract plain text from a Google Docs document body, stopping before the review section.
 
@@ -2560,6 +2842,29 @@ def list_suggestions(doc_id_or_url: str) -> dict:
     return _suggestions_from_doc(doc)
 
 
+def prose_check(doc_id_or_url: str, terms_path: str | None = None) -> dict:
+    """Run the mechanical pre-submission sweep over a chapter.
+
+    Reports the countable and greppable style rules with their target numbers, plus
+    the structural checks that need the Docs API (italics on first use, stacked
+    headings, figure references). Judgement checks are listed under `needs_a_reader`
+    rather than guessed at. See the work's style_guide.md for the rules themselves.
+
+    `terms_path` points at a newline-delimited list of the work's terms of art (blank
+    lines and `#` comments ignored); with it, the sweep also reports which terms aren't
+    italicized on first use."""
+    doc_id = _extract_doc_id(doc_id_or_url)
+    terms = None
+    if terms_path:
+        with open(terms_path, encoding="utf-8") as handle:
+            terms = [
+                line.strip() for line in handle
+                if line.strip() and not line.lstrip().startswith("#")
+            ]
+    doc = _docs_service().documents().get(documentId=doc_id).execute()
+    return _prose_check_from_doc(doc, terms)
+
+
 def insert_after(
     doc_id_or_url: str, anchor: str, text: str, allow_multiple: bool = False,
     occurrence: int | None = None,
@@ -3727,6 +4032,16 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_suggestions.add_argument("doc", metavar="DOC_URL")
 
+    p_prose_check = sub.add_parser(
+        "prose-check",
+        help="Mechanical style sweep: sentence length, em-dashes, passives, italics, headings.",
+    )
+    p_prose_check.add_argument("doc", metavar="DOC_URL")
+    p_prose_check.add_argument(
+        "--terms", metavar="PATH", default=None,
+        help="Newline-delimited list of the work's terms of art, to check first-use italics.",
+    )
+
     p_insert_after = sub.add_parser(
         "insert-after",
         help="Insert text as new paragraph(s) after the paragraph containing an anchor.",
@@ -3990,6 +4305,8 @@ def main() -> None:
         result = outline_document(args.doc, full=args.full)
     elif args.command == "suggestions":
         result = list_suggestions(args.doc)
+    elif args.command == "prose-check":
+        result = prose_check(args.doc, args.terms)
     elif args.command == "insert-after":
         result = insert_after(
             args.doc, args.anchor, args.text,
