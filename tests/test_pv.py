@@ -1662,6 +1662,13 @@ def test_prose_text_checks_finds_passives_tics_and_uk_forms():
     assert "artefactx1" in _named(checks, "uk_spellings")["detail"]
 
 
+def test_uk_watchlist_catches_doubled_l_but_spares_final_stress():
+    """UK doubles a final L; US only when the stress is on the last syllable."""
+    checks = _prose_text_checks("Threat modelling of a controlled, compelled system.")
+    detail = _named(checks, "uk_spellings")["detail"]
+    assert detail == ["modellingx1"]
+
+
 def test_prose_text_checks_acronyms_skip_the_assumed_list():
     checks = _prose_text_checks("The API and the LLM talk to the VPC over OIDC.")
     detail = _named(checks, "acronyms_to_verify")["detail"]

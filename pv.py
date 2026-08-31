@@ -1295,8 +1295,16 @@ _TIC_PHRASES = (
 _UK_FORMS = (
     "artefact", "organisation", "judgement", "behaviour", "generalisation",
     "optimise", "customise", "analyse", "realise", "recognise", "destabilise",
-    "towards", "traveller", "licence", "cancelled", "amongst", "whilst",
-    "modelling", "labelled",
+    "towards", "licence", "amongst", "whilst",
+    # UK doubles a final L before a suffix; US only doubles when the stress falls
+    # on the final syllable. So modelling/labelling are UK, but "controlled" and
+    # "compelled" are correct in both and must not be caught here.
+    "modelling", "modelled", "labelling", "labelled", "travelling", "travelled",
+    "traveller", "cancelling", "cancelled", "signalling", "signalled",
+    "totalling", "totalled", "levelling", "levelled", "channelling", "channelled",
+    "marvelled", "counselling", "fuelling", "fuelled", "marshalling",
+    "quarrelling", "unravelling", "tunnelling", "funnelling", "spiralling",
+    "dialled", "dialling",
 )
 _SPELLED_NUMBERS = (
     "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
