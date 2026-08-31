@@ -894,6 +894,77 @@ def _heading_plan(
     }
 
 
+def _paragraphs_containing(doc: dict, needle: str) -> list[dict]:
+    """Body paragraph elements whose text contains `needle`, in reading order.
+
+    Quote-agnostic and case-insensitive, matching the rest of pv's text anchoring.
+    """
+    key = _normalize_quotes(needle.lower())
+    found = []
+    for el in doc.get("body", {}).get("content", []):
+        paragraph = el.get("paragraph")
+        if paragraph is None:
+            continue
+        text = _normalize_quotes(_text_from_elements(paragraph.get("elements", [])).lower())
+        if key in text:
+            found.append(el)
+    return found
+
+
+def _shade_plan(
+    doc: dict, start_anchor: str, end_anchor: str,
+    color: str | None = None, remove: bool = False, all_pairs: bool = False,
+) -> dict:
+    """Shade every paragraph from `start_anchor` to `end_anchor` inclusive.
+
+    Built for delimited blocks — a book's `<sidebar>`…`</sidebar>` markers, say —
+    so `all_pairs` walks the openers and closers in reading order and shades each
+    pair. Refuses to act on an unbalanced or crossed set of markers rather than
+    guessing which opener a closer belongs to, since a wrong guess silently shades
+    the wrong half of a chapter.
+    """
+    starts = _paragraphs_containing(doc, start_anchor)
+    ends = _paragraphs_containing(doc, end_anchor)
+    if start_anchor.lower() != end_anchor.lower():
+        # A closing marker usually contains the opening one as a substring
+        # ("<sidebar>" inside "</sidebar>"); keep them distinct.
+        end_ids = {id(el) for el in ends}
+        starts = [el for el in starts if id(el) not in end_ids]
+    if not starts or not ends:
+        return {
+            "kind": "not_found",
+            "start_matches": len(starts), "end_matches": len(ends),
+        }
+    if not all_pairs:
+        starts, ends = starts[:1], ends[:1]
+    if len(starts) != len(ends):
+        return {
+            "kind": "unbalanced",
+            "start_matches": len(starts), "end_matches": len(ends),
+            "detail": "each opening marker needs exactly one closing marker",
+        }
+    shading = (
+        {"backgroundColor": {}} if remove
+        else {"backgroundColor": {"color": {"rgbColor": _parse_hex_color(color or "#efefef")}}}
+    )
+    requests, ranges = [], []
+    previous_end = -1
+    for start_el, end_el in zip(starts, ends):
+        if end_el["startIndex"] < start_el["startIndex"]:
+            return {"kind": "crossed", "detail": "a closing marker precedes its opener"}
+        if start_el["startIndex"] < previous_end:
+            return {"kind": "crossed", "detail": "marker ranges overlap"}
+        previous_end = end_el["endIndex"]
+        rng = {"startIndex": start_el["startIndex"], "endIndex": end_el["endIndex"]}
+        ranges.append(rng)
+        requests.append({"updateParagraphStyle": {
+            "range": rng,
+            "paragraphStyle": {"shading": shading},
+            "fields": "shading.backgroundColor",
+        }})
+    return {"kind": "ok", "requests": requests, "ranges": ranges, "count": len(ranges)}
+
+
 def _bullets_plan(
     doc: dict, start_anchor: str, end_anchor: str | None = None, ordered: bool = False,
     start_occurrence: int | None = None, end_occurrence: int | None = None,
@@ -2944,6 +3015,26 @@ def list_suggestions(doc_id_or_url: str) -> dict:
     return _suggestions_from_doc(doc)
 
 
+def shade(
+    doc_id_or_url: str, start_anchor: str, end_anchor: str,
+    color: str | None = None, remove: bool = False, all_pairs: bool = False,
+) -> dict:
+    """Shade the paragraphs of a delimited block, e.g. a sidebar, with a background color."""
+    doc_id = _extract_doc_id(doc_id_or_url)
+    doc = _docs_service().documents().get(documentId=doc_id).execute()
+    plan = _shade_plan(doc, start_anchor, end_anchor, color, remove, all_pairs)
+    if plan["kind"] != "ok":
+        return plan
+    if plan["requests"]:
+        _docs_service().documents().batchUpdate(
+            documentId=doc_id, body={"requests": plan["requests"]},
+        ).execute()
+    return {
+        "status": "unshaded" if remove else "shaded",
+        "blocks": plan["count"], "ranges": plan["ranges"],
+    }
+
+
 def prose_check(
     doc_id_or_url: str, terms_path: str | None = None, chapter: str | None = None,
     phrases_path: str | None = None,
@@ -4142,6 +4233,18 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_suggestions.add_argument("doc", metavar="DOC_URL")
 
+    p_shade = sub.add_parser(
+        "shade",
+        help="Shade the paragraphs of a delimited block (e.g. a sidebar) with a background color.",
+    )
+    p_shade.add_argument("doc", metavar="DOC_URL")
+    p_shade.add_argument("start", metavar="START_MARKER")
+    p_shade.add_argument("end", metavar="END_MARKER")
+    p_shade.add_argument("--color", default=None, help="Hex background, default #efefef.")
+    p_shade.add_argument("--all", action="store_true", dest="all_pairs",
+                         help="Shade every marker pair in the document, not just the first.")
+    p_shade.add_argument("--remove", action="store_true", help="Clear the shading instead.")
+
     p_prose_check = sub.add_parser(
         "prose-check",
         help="Mechanical style sweep: sentence length, em-dashes, passives, italics, headings.",
@@ -4423,6 +4526,8 @@ def main() -> None:
         result = outline_document(args.doc, full=args.full)
     elif args.command == "suggestions":
         result = list_suggestions(args.doc)
+    elif args.command == "shade":
+        result = shade(args.doc, args.start, args.end, args.color, args.remove, args.all_pairs)
     elif args.command == "prose-check":
         result = prose_check(args.doc, args.terms, args.chapter, args.phrases)
     elif args.command == "insert-after":

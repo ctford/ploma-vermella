@@ -68,6 +68,7 @@ from pv import (
     _replace_image_plan,
     _replace_section_plan,
     _review_copy_title,
+    _shade_plan,
     _shape_text,
     _slugify,
     _style_plan,
@@ -1840,6 +1841,94 @@ def test_prose_check_reports_flagged_count_and_judgement_list():
     assert result["flagged"] == sum(1 for c in result["checks"] if c["status"] == "review")
     assert result["flagged"] > 0
     assert any("citation" in item for item in result["needs_a_reader"])
+
+
+# ---------------------------------------------------------------------------
+# _shade_plan / pv shade
+# ---------------------------------------------------------------------------
+
+def _marked_doc(*texts, start=1):
+    content, idx = [], start
+    for t in texts:
+        content.append({
+            "startIndex": idx, "endIndex": idx + len(t),
+            "paragraph": {"elements": [{"textRun": {"content": t}}]},
+        })
+        idx += len(t)
+    return {"body": {"content": content}}
+
+
+SHADE_DOC = _marked_doc(
+    "Intro paragraph\n", "<sidebar>\n", "Sidebar body\n", "</sidebar>\n",
+    "Middle prose\n", "<sidebar>\n", "Second body\n", "</sidebar>\n", "Outro\n",
+)
+
+
+def test_shade_plan_covers_the_inclusive_marker_range():
+    plan = _shade_plan(SHADE_DOC, "<sidebar>", "</sidebar>", "#efefef")
+    assert plan["kind"] == "ok"
+    assert plan["count"] == 1
+    first = SHADE_DOC["body"]["content"][1]
+    closer = SHADE_DOC["body"]["content"][3]
+    assert plan["ranges"][0] == {
+        "startIndex": first["startIndex"], "endIndex": closer["endIndex"],
+    }
+
+
+def test_shade_plan_all_pairs_shades_every_block():
+    plan = _shade_plan(SHADE_DOC, "<sidebar>", "</sidebar>", "#efefef", all_pairs=True)
+    assert plan["count"] == 2
+    assert plan["ranges"][0]["endIndex"] < plan["ranges"][1]["startIndex"]
+
+
+def test_shade_plan_does_not_treat_a_closer_as_an_opener():
+    """'</sidebar>' contains '<sidebar>' as a substring; openers must exclude closers."""
+    plan = _shade_plan(SHADE_DOC, "<sidebar>", "</sidebar>", all_pairs=True)
+    assert plan["count"] == 2
+
+
+def test_shade_plan_refuses_unbalanced_markers():
+    doc = _marked_doc("<sidebar>\n", "Body\n", "<sidebar>\n", "More\n", "</sidebar>\n")
+    plan = _shade_plan(doc, "<sidebar>", "</sidebar>", all_pairs=True)
+    assert plan["kind"] == "unbalanced"
+    assert plan["start_matches"] == 2 and plan["end_matches"] == 1
+
+
+def test_shade_plan_refuses_a_closer_before_its_opener():
+    doc = _marked_doc("</sidebar>\n", "Body\n", "<sidebar>\n")
+    plan = _shade_plan(doc, "<sidebar>", "</sidebar>")
+    assert plan["kind"] == "crossed"
+
+
+def test_shade_plan_reports_missing_markers():
+    plan = _shade_plan(_marked_doc("Just prose\n"), "<sidebar>", "</sidebar>")
+    assert plan["kind"] == "not_found"
+
+
+def test_shade_plan_remove_clears_the_background():
+    plan = _shade_plan(SHADE_DOC, "<sidebar>", "</sidebar>", remove=True)
+    style = plan["requests"][0]["updateParagraphStyle"]["paragraphStyle"]
+    assert style["shading"] == {"backgroundColor": {}}
+
+
+def test_shade_plan_defaults_to_light_grey():
+    plan = _shade_plan(SHADE_DOC, "<sidebar>", "</sidebar>")
+    rgb = (plan["requests"][0]["updateParagraphStyle"]["paragraphStyle"]
+           ["shading"]["backgroundColor"]["color"]["rgbColor"])
+    assert round(rgb["red"], 4) == round(0xEF / 255, 4)
+
+
+def test_shade_plan_is_case_insensitive_about_markers():
+    doc = _marked_doc("<SIDEBAR>\n", "Body\n", "</SIDEBAR>\n")
+    assert _shade_plan(doc, "<sidebar>", "</sidebar>")["kind"] == "ok"
+
+
+def test_build_parser_shade():
+    args = _build_parser().parse_args(
+        ["shade", "DOC", "<sidebar>", "</sidebar>", "--color", "#eeeeee", "--all"],
+    )
+    assert args.command == "shade" and args.all_pairs is True
+    assert args.color == "#eeeeee"
 
 
 def test_build_parser_prose_check():
