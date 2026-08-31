@@ -65,7 +65,7 @@ pv sheet-fetch <sheet-url> --range ...      # read sheet rows by range
 pv sheet-update <sheet-url> <range> ...     # write sheet rows from JSON
 pv figure-map <doc-url>                     # inspect image neighborhoods in a doc
 pv outline <doc-url> [--full]               # structural map: headings + images, with indices
-pv prose-check <doc-url> [--terms PATH] [--chapter CH]  # mechanical style sweep against the work's style guide
+pv prose-check <doc-url> [--terms PATH] [--chapter CH] [--phrases PATH]  # mechanical style sweep against the work's style guide
 pv suggestions <doc-url>                    # list an editor's suggested edits as before→after deltas
                                             # (includes style-only suggestions: italics, links, bullets)
 pv replace-block <doc-url> <start> <end> ... # replace an inclusive body-element range safely
