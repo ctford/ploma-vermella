@@ -1337,7 +1337,26 @@ def _check(name: str, status: str, value, target, detail=None) -> dict:
     }
 
 
-def _prose_text_checks(text: str) -> list[dict]:
+def _flagged_phrases(text: str, phrases: list[str]) -> list[str]:
+    """Count occurrences of a work's banned phrases, as `phrase xN` for each hit.
+
+    A phrase list is per-work and deliberately conservative. Its main use is catching
+    the register of machine-drafted prose leaking into a manuscript, which is a moving
+    target — so it lives in a file the author curates, not in this module.
+    """
+    lowered = _normalize_quotes(text.lower())
+    found = []
+    for phrase in phrases:
+        key = _normalize_quotes(phrase.strip().lower())
+        if not key:
+            continue
+        n = len(re.findall(rf"(?<!\w){re.escape(key)}(?!\w)", lowered))
+        if n:
+            found.append(f"{key} x{n}")
+    return found
+
+
+def _prose_text_checks(text: str, phrases: list[str] | None = None) -> list[dict]:
     """Character-level checks: length, density, and greppable house style."""
     sentences = _sentences(text)
     words = text.split()
@@ -1412,6 +1431,13 @@ def _prose_text_checks(text: str) -> list[dict]:
         "spelled_numbers_over_nine", "ok" if not spelled else "review",
         len(spelled), "0 — numerals for 10 and up", spelled,
     ))
+
+    if phrases:
+        hits = _flagged_phrases(text, phrases)
+        checks.append(_check(
+            "flagged_phrases", "ok" if not hits else "review", len(hits),
+            "0 — the work's banned-phrase list", hits[:30],
+        ))
     return checks
 
 
@@ -1594,11 +1620,12 @@ def _prose_structure_checks(
 
 def _prose_check_from_doc(
     doc: dict, terms: list[tuple[str, str | None]] | None = None,
-    chapter: str | None = None,
+    chapter: str | None = None, phrases: list[str] | None = None,
 ) -> dict:
     """Run the mechanical half of the pre-submission sweep over a document."""
     text = _extract_text(doc)
-    checks = _prose_text_checks(text) + _prose_structure_checks(doc, text, terms, chapter)
+    checks = (_prose_text_checks(text, phrases)
+              + _prose_structure_checks(doc, text, terms, chapter))
     return {
         "title": doc.get("title", ""),
         "word_count": len(text.split()),
@@ -2919,6 +2946,7 @@ def list_suggestions(doc_id_or_url: str) -> dict:
 
 def prose_check(
     doc_id_or_url: str, terms_path: str | None = None, chapter: str | None = None,
+    phrases_path: str | None = None,
 ) -> dict:
     """Run the mechanical pre-submission sweep over a chapter.
 
@@ -2936,8 +2964,15 @@ def prose_check(
     if terms_path:
         with open(terms_path, encoding="utf-8") as handle:
             terms = _parse_terms(handle)
+    phrases = None
+    if phrases_path:
+        with open(phrases_path, encoding="utf-8") as handle:
+            phrases = [
+                line.strip() for line in handle
+                if line.strip() and not line.lstrip().startswith("#")
+            ]
     doc = _docs_service().documents().get(documentId=doc_id).execute()
-    return _prose_check_from_doc(doc, terms, chapter)
+    return _prose_check_from_doc(doc, terms, chapter, phrases)
 
 
 def insert_after(
@@ -4120,6 +4155,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--chapter", metavar="CH", default=None,
         help="Which chapter this doc is (e.g. 07), so terms introduced elsewhere stay plain.",
     )
+    p_prose_check.add_argument(
+        "--phrases", metavar="PATH", default=None,
+        help="Newline-delimited phrases to flag (e.g. a work's LLM-speak list).",
+    )
 
     p_insert_after = sub.add_parser(
         "insert-after",
@@ -4385,7 +4424,7 @@ def main() -> None:
     elif args.command == "suggestions":
         result = list_suggestions(args.doc)
     elif args.command == "prose-check":
-        result = prose_check(args.doc, args.terms, args.chapter)
+        result = prose_check(args.doc, args.terms, args.chapter, args.phrases)
     elif args.command == "insert-after":
         result = insert_after(
             args.doc, args.anchor, args.text,

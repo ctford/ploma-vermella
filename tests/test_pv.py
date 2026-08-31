@@ -1669,6 +1669,26 @@ def test_uk_watchlist_catches_doubled_l_but_spares_final_stress():
     assert detail == ["modellingx1"]
 
 
+def test_flagged_phrases_counts_and_is_quote_agnostic():
+    """The list is per-work; smart and straight apostrophes must match alike."""
+    text = "In today’s world it shows up, and it shows up again. Here’s the thing."
+    checks = _prose_text_checks(text, ["shows up", "in today's", "here's the thing"])
+    detail = _named(checks, "flagged_phrases")["detail"]
+    assert "shows up x2" in detail
+    assert "in today's x1" in detail
+    assert "here's the thing x1" in detail
+
+
+def test_flagged_phrases_check_absent_without_a_list():
+    names = [c["check"] for c in _prose_text_checks("Plain prose.")]
+    assert "flagged_phrases" not in names
+
+
+def test_flagged_phrases_does_not_match_inside_a_longer_word():
+    checks = _prose_text_checks("The realms of possibility.", ["realm"])
+    assert _named(checks, "flagged_phrases")["status"] == "ok"
+
+
 def test_prose_text_checks_acronyms_skip_the_assumed_list():
     checks = _prose_text_checks("The API and the LLM talk to the VPC over OIDC.")
     detail = _named(checks, "acronyms_to_verify")["detail"]
