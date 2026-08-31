@@ -153,10 +153,16 @@ the agent writing it is the least likely to notice. So:
   as part of any review or sweep, and treat hits as mechanical fixes.
 - **Add to the list when the user names a new one**, and note in the file whether it was
   measured in the manuscript or is there to prevent ingress.
-- **Never edit the author's own voice on this basis.** Check provenance with
-  `git log -S "<phrase>"` first. A phrase in a thematic glossary, a quotation, or prose the
-  author wrote is theirs — flag it, don't rewrite it. The list exists to catch the agent's
-  register, not to flatten the author's.
+- **Never edit the author's own voice on this basis — but check provenance properly.**
+  `git log -S` is **useless** for this: the agent commits as the user, so everything in a
+  work's context repo reads as the author's regardless of who wrote it. Much of that repo is
+  agent-written, so presence there is not evidence of anything.
+  The reliable test is the work's **`talking-chapters/` transcripts**, which are unambiguously
+  the author speaking:
+  - Present in the transcripts → the author's word. Leave it alone.
+  - Absent from every transcript, but present in agent-written docs → very likely the agent's.
+    Say so, and check with the author before adding it to the list.
+  A phrase inside a quotation is always the source's, whoever typed it.
 - **Keep the list conservative.** Measure before adding: a phrase with legitimate use at volume
   (`leverage` as a noun, `carries`, `land`, `sits`) makes the check noisy and then ignored.
   Record rejections with their counts so the list is not re-padded on intuition later.
