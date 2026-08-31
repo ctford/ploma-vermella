@@ -140,6 +140,27 @@ When asked to review a chapter:
 5. Run `pv clear <doc-url>` to remove any previous review section
 6. For each issue found, run `pv note <doc-url> <quoted-text> <comment>` — `quoted_text` must be an exact substring of the document text. The `comment` should be self-contained: when the problem is a specific word or phrase, quote it inside the comment (e.g. `"Draft placeholder: \"Something something\" — expand or cut"`) so the reader knows exactly what to fix without needing to hunt for the highlighted text.
 
+## LLM-speak
+
+Agent-assisted drafting is the likeliest way machine-register prose enters a manuscript, and
+the agent writing it is the least likely to notice. So:
+
+- **Check your own prose before proposing it.** Any drafted sentence, definition, sidebar or
+  rewrite gets checked against the work's phrase list (`context/<work>/llm-speak.txt`) *before*
+  it reaches the user or the document. This applies to prose written into the work's context
+  repo too, not just into chapters.
+- **Correct it during editing.** Run `pv prose-check <doc> --phrases context/<work>/llm-speak.txt`
+  as part of any review or sweep, and treat hits as mechanical fixes.
+- **Add to the list when the user names a new one**, and note in the file whether it was
+  measured in the manuscript or is there to prevent ingress.
+- **Never edit the author's own voice on this basis.** Check provenance with
+  `git log -S "<phrase>"` first. A phrase in a thematic glossary, a quotation, or prose the
+  author wrote is theirs — flag it, don't rewrite it. The list exists to catch the agent's
+  register, not to flatten the author's.
+- **Keep the list conservative.** Measure before adding: a phrase with legitimate use at volume
+  (`leverage` as a noun, `carries`, `land`, `sits`) makes the check noisy and then ignored.
+  Record rejections with their counts so the list is not re-padded on intuition later.
+
 ## Acting on Review Feedback
 
 When working through review notes (PV bullets or sidebar comments), classify each into one of three tiers and act accordingly:
