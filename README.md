@@ -65,6 +65,7 @@ pv sheet-fetch <sheet-url> --range ...      # read sheet rows by range
 pv sheet-update <sheet-url> <range> ...     # write sheet rows from JSON
 pv figure-map <doc-url>                     # inspect image neighborhoods in a doc
 pv outline <doc-url> [--full]               # structural map: headings + images, with indices
+pv words <doc-or-folder-url> [--exclude SUBSTRING ...]  # word count, per doc and total
 pv shade <doc-url> <start> <end> [--color HEX] [--all]  # shade a delimited block (e.g. a sidebar)
 pv prose-check <doc-url> [--terms PATH] [--chapter CH] [--phrases PATH]  # mechanical style sweep against the work's style guide
 pv suggestions <doc-url>                    # list an editor's suggested edits as before→after deltas

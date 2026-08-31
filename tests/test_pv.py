@@ -79,6 +79,7 @@ from pv import (
     _toc_entries_html,
     _toc_page_xhtml,
     _utf16_len,
+    _word_count_summary,
     main,
 )
 
@@ -1929,6 +1930,55 @@ def test_build_parser_shade():
     )
     assert args.command == "shade" and args.all_pairs is True
     assert args.color == "#eeeeee"
+
+
+# ---------------------------------------------------------------------------
+# _word_count_summary / pv words
+# ---------------------------------------------------------------------------
+
+WORD_ENTRIES = [
+    ("Chapter 01: Legacy", "one two three four five"),
+    ("Chapter 02: Context", "six seven eight"),
+    ("[Old] Chapter 01: Superseded", "stale words here that should not count"),
+    ("Table of Contents", "toc"),
+]
+
+
+def test_word_count_summary_totals_every_document_by_default():
+    r = _word_count_summary(WORD_ENTRIES)
+    assert r["document_count"] == 4
+    assert r["total_words"] == 5 + 3 + 7 + 1
+    assert r["excluded"] == []
+
+
+def test_word_count_summary_excludes_by_case_insensitive_substring():
+    r = _word_count_summary(WORD_ENTRIES, ["[old]", "table of contents"])
+    assert r["document_count"] == 2
+    assert r["total_words"] == 8
+    assert [d["name"] for d in r["excluded"]] == [
+        "[Old] Chapter 01: Superseded", "Table of Contents",
+    ]
+
+
+def test_word_count_summary_reports_what_it_skipped():
+    """A total that silently drops documents is worse than no total."""
+    r = _word_count_summary(WORD_ENTRIES, ["[old]"])
+    assert r["excluded_words"] == 7
+    assert r["excluded"][0]["words"] == 7
+
+
+def test_word_count_summary_handles_an_empty_folder():
+    r = _word_count_summary([])
+    assert r == {"documents": [], "document_count": 0, "total_words": 0,
+                 "excluded": [], "excluded_words": 0}
+
+
+def test_build_parser_words():
+    args = _build_parser().parse_args(
+        ["words", "FOLDER", "--exclude", "[Old]", "--exclude", "Index"],
+    )
+    assert args.command == "words"
+    assert args.exclude == ["[Old]", "Index"]
 
 
 def test_build_parser_prose_check():

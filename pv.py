@@ -3035,6 +3035,46 @@ def shade(
     }
 
 
+def _word_count_summary(entries, exclude=None) -> dict:
+    """Summarize word counts for [(name, text)] pairs, skipping excluded names.
+
+    `exclude` holds case-insensitive substrings. A manuscript folder usually carries
+    things that are not the book — superseded drafts, a table of contents, an index —
+    and a total that silently includes them is worse than no total at all, so the
+    skipped documents are reported rather than dropped.
+    """
+    exclude = [e.lower() for e in (exclude or [])]
+    counted, skipped = [], []
+    for name, text in entries:
+        words = len(text.split())
+        entry = {"name": name, "words": words}
+        (skipped if any(e in name.lower() for e in exclude) else counted).append(entry)
+    return {
+        "documents": counted,
+        "document_count": len(counted),
+        "total_words": sum(d["words"] for d in counted),
+        "excluded": skipped,
+        "excluded_words": sum(d["words"] for d in skipped),
+    }
+
+
+def word_count(target: str, exclude=None) -> dict:
+    """Count words in one doc, or in every Google Doc in a Drive folder.
+
+    Counts the same text `pv fetch` returns, so a review section is not included."""
+    service = _docs_service()
+    if _FOLDER_URL_RE.search(target):
+        entries = []
+        for item in list_folder(target):
+            doc = service.documents().get(documentId=item["id"]).execute()
+            entries.append((item["name"], _extract_text(doc)))
+        entries.sort(key=lambda pair: pair[0])
+    else:
+        doc = service.documents().get(documentId=_extract_doc_id(target)).execute()
+        entries = [(doc.get("title", ""), _extract_text(doc))]
+    return _word_count_summary(entries, exclude)
+
+
 def prose_check(
     doc_id_or_url: str, terms_path: str | None = None, chapter: str | None = None,
     phrases_path: str | None = None,
@@ -4245,6 +4285,16 @@ def _build_parser() -> argparse.ArgumentParser:
                          help="Shade every marker pair in the document, not just the first.")
     p_shade.add_argument("--remove", action="store_true", help="Clear the shading instead.")
 
+    p_words = sub.add_parser(
+        "words",
+        help="Word count for a doc, or every doc in a Drive folder, with a total.",
+    )
+    p_words.add_argument("target", metavar="DOC_OR_FOLDER_URL")
+    p_words.add_argument(
+        "--exclude", action="append", default=None, metavar="SUBSTRING",
+        help="Skip documents whose name contains this (repeatable, case-insensitive).",
+    )
+
     p_prose_check = sub.add_parser(
         "prose-check",
         help="Mechanical style sweep: sentence length, em-dashes, passives, italics, headings.",
@@ -4528,6 +4578,8 @@ def main() -> None:
         result = list_suggestions(args.doc)
     elif args.command == "shade":
         result = shade(args.doc, args.start, args.end, args.color, args.remove, args.all_pairs)
+    elif args.command == "words":
+        result = word_count(args.target, args.exclude)
     elif args.command == "prose-check":
         result = prose_check(args.doc, args.terms, args.chapter, args.phrases)
     elif args.command == "insert-after":
