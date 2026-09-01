@@ -63,6 +63,7 @@ from pv import (
     _plan_edit_matches,
     _preceding_image_id,
     _prose_check_from_doc,
+    _prose_structure_checks,
     _prose_text_checks,
     _replace_body_range_plan,
     _replace_image_plan,
@@ -1807,6 +1808,28 @@ def test_repeated_italics_still_flags_a_real_term():
     ])]}}
     checks = _prose_check_from_doc(doc)["checks"]
     assert _named(checks, "terms_italicized_more_than_once")["detail"] == ["setpoint"]
+
+
+def test_prose_check_ignores_headings_when_locating_first_use():
+    """A term named in a heading is not its first use; the body italics aren't late."""
+    doc = {"body": {"content": [
+        {"paragraph": {
+            "paragraphStyle": {"namedStyleType": "HEADING_1"},
+            "elements": [{"textRun": {"content": "S-type systems\n", "textStyle": {}}}],
+        }},
+        {"paragraph": {
+            "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+            "elements": [
+                {"textRun": {"content": "An ", "textStyle": {}}},
+                {"textRun": {"content": "S-type", "textStyle": {"italic": True}}},
+                {"textRun": {"content": " program is derivable.\n", "textStyle": {}}},
+            ],
+        }},
+    ]}}
+    text = "S-type systems\nAn S-type program is derivable.\n"
+    checks = _prose_structure_checks(doc, text, terms=[("S-type", None)])
+    assert _named(checks, "terms_missing_italics_on_first_use")["value"] == 0
+    assert _named(checks, "italics_not_on_first_use")["value"] == 0
 
 
 def test_prose_check_flags_stacked_headings():

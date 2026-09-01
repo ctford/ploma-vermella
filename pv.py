@@ -1572,6 +1572,39 @@ def _italic_spans(doc: dict) -> list[tuple[int, str]]:
     return spans
 
 
+def _prose_only(doc: dict, text: str) -> str:
+    """`text` with title and heading paragraphs blanked out, offsets preserved.
+
+    The italics rules are about running prose. A term named in a section heading is
+    not its first *use*: "S-type, P-type, and E-type systems" as a heading would
+    otherwise demand italics inside the heading, and make the body's definitional
+    italics look late. Falls back to the text unchanged if the traversal disagrees
+    with it (a document with tables), so the checks degrade rather than misalign.
+    """
+    chars = list(text)
+    pos = 0
+    for element in doc.get("body", {}).get("content", []):
+        paragraph = element.get("paragraph")
+        if not paragraph:
+            continue
+        style = (paragraph.get("paragraphStyle") or {}).get(
+            "namedStyleType", "NORMAL_TEXT"
+        )
+        start = pos
+        for pe in paragraph.get("elements", []):
+            run = pe.get("textRun")
+            if run is None:
+                continue
+            pos += len(run.get("content", ""))
+        if style != "NORMAL_TEXT":
+            for i in range(start, min(pos, len(chars))):
+                if chars[i] != "\n":
+                    chars[i] = " "
+    if pos != len(text):
+        return text
+    return "".join(chars)
+
+
 def _parse_terms(lines) -> list[tuple[str, str | None]]:
     """Parse a terms file into (term, home_chapter) pairs.
 
@@ -1635,8 +1668,9 @@ def _prose_structure_checks(
     checks = []
 
     spans = _italic_spans(doc)
+    prose = _prose_only(doc, text)
     if terms:
-        missing, away = _terms_italics_scope(text, spans, terms, chapter)
+        missing, away = _terms_italics_scope(prose, spans, terms, chapter)
         checks.append(_check(
             "terms_missing_italics_on_first_use", "ok" if not missing else "review",
             len(missing), "0 — italicize a term of art the first time it appears",
@@ -1661,7 +1695,7 @@ def _prose_structure_checks(
         if seen[key] > 1:
             repeated.append(term)
             continue
-        earlier = text[:start].lower()
+        earlier = prose[:start].lower()
         if re.search(rf"\b{re.escape(key)}\b", earlier):
             late.append(term)
     checks.append(_check(
