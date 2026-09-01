@@ -1378,7 +1378,8 @@ _PASSIVE_RE = re.compile(
     r"\b(?:is|are|was|were|be|been|being)\s+(?:\w+ly\s+)?\w+(?:ed|en)\b", re.I
 )
 _ACRONYM_RE = re.compile(r"\b[A-Z]{2,}s?\b")
-_ASSUMED_ACRONYMS = frozenset({"API", "LLM", "US", "UK", "AI", "IT", "OK"})
+# The audience is architects and senior engineers, so these need no expansion.
+_ASSUMED_ACRONYMS = frozenset({"API", "LLM", "US", "UK", "AI", "IT", "OK", "CTO", "UI"})
 
 _TIC_PHRASES = (
     "in order to", "the fact that", "able to", "the extent to which",

@@ -1714,7 +1714,9 @@ def test_flagged_phrases_does_not_match_inside_a_longer_word():
 
 
 def test_prose_text_checks_acronyms_skip_the_assumed_list():
-    checks = _prose_text_checks("The API and the LLM talk to the VPC over OIDC.")
+    checks = _prose_text_checks(
+        "The API and the LLM talk to the VPC over OIDC, and the CTO saw the UI."
+    )
     detail = _named(checks, "acronyms_to_verify")["detail"]
     assert detail == ["OIDC", "VPC"]
 
