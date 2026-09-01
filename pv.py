@@ -1542,34 +1542,65 @@ def _prose_text_checks(text: str, phrases: list[str] | None = None) -> list[dict
 
 
 def _italic_spans(doc: dict) -> list[tuple[int, str]]:
-    """Italic text spans in reading order, as (start offset in flat text, text).
+    """Italic text spans as (start offset in the *rendered* body text, rendered text).
+
+    Offsets must line up with `_extract_text`, which renders a linked run as
+    `[text](url)` and a table row by row — so this walks the body the same way and
+    measures in rendered characters. Counting raw run content instead drifts by the
+    length of every link markup ahead of a term, which silently moved every italics
+    check past the first hyperlink onto the wrong characters.
 
     Adjacent italic runs are merged so a term split across runs reads as one span.
     """
     spans: list[tuple[int, str]] = []
     pos = 0
     pending_start, pending_text = None, ""
+
+    def flush() -> None:
+        nonlocal pending_start, pending_text
+        if pending_start is not None:
+            spans.append((pending_start, pending_text))
+            pending_start, pending_text = None, ""
+
     for element in doc.get("body", {}).get("content", []):
+        table = element.get("table")
+        if table:
+            flush()
+            pos += len(_render_table(table))
+            continue
         paragraph = element.get("paragraph")
         if not paragraph:
             continue
+        if _text_from_elements(paragraph.get("elements", [])) == _REVIEW_HEADING:
+            break
         for pe in paragraph.get("elements", []):
             run = pe.get("textRun")
             if run is None:
                 continue
-            content = run.get("content", "")
+            chunk = _render_para_elements([pe])
             if run.get("textStyle", {}).get("italic"):
                 if pending_start is None:
                     pending_start = pos
-                pending_text += content
+                pending_text += chunk
             else:
-                if pending_start is not None:
-                    spans.append((pending_start, pending_text))
-                    pending_start, pending_text = None, ""
-            pos += len(content)
-    if pending_start is not None:
-        spans.append((pending_start, pending_text))
+                flush()
+            pos += len(chunk)
+    flush()
     return spans
+
+
+_RENDERED_LINK_RE = re.compile(r"^\[(?P<text>.*)\]\([^)]*\)$", re.S)
+
+
+def _span_text(raw: str) -> str:
+    """The visible words of a rendered span, without its link or strikethrough markup."""
+    stripped = raw.strip()
+    match = _RENDERED_LINK_RE.match(stripped)
+    if match:
+        return match.group("text")
+    if len(stripped) > 4 and stripped.startswith("~~") and stripped.endswith("~~"):
+        return stripped[2:-2]
+    return raw
 
 
 def _prose_only(doc: dict, text: str) -> str:
@@ -1578,24 +1609,27 @@ def _prose_only(doc: dict, text: str) -> str:
     The italics rules are about running prose. A term named in a section heading is
     not its first *use*: "S-type, P-type, and E-type systems" as a heading would
     otherwise demand italics inside the heading, and make the body's definitional
-    italics look late. Falls back to the text unchanged if the traversal disagrees
-    with it (a document with tables), so the checks degrade rather than misalign.
+    italics in the paragraph below look late. Walks the body exactly as
+    `_extract_text` does; if the two still disagree it returns the text unchanged, so
+    the checks degrade rather than misalign.
     """
     chars = list(text)
     pos = 0
     for element in doc.get("body", {}).get("content", []):
+        table = element.get("table")
+        if table:
+            pos += len(_render_table(table))
+            continue
         paragraph = element.get("paragraph")
         if not paragraph:
             continue
+        if _text_from_elements(paragraph.get("elements", [])) == _REVIEW_HEADING:
+            break
+        start = pos
+        pos += len(_render_para_elements(paragraph.get("elements", [])))
         style = (paragraph.get("paragraphStyle") or {}).get(
             "namedStyleType", "NORMAL_TEXT"
         )
-        start = pos
-        for pe in paragraph.get("elements", []):
-            run = pe.get("textRun")
-            if run is None:
-                continue
-            pos += len(run.get("content", ""))
         if style != "NORMAL_TEXT":
             for i in range(start, min(pos, len(chars))):
                 if chars[i] != "\n":
@@ -1650,7 +1684,7 @@ def _terms_italics_scope(
         if chapter is not None and home is not None and home != chapter:
             # Introduced elsewhere: it should be plain everywhere here.
             if any(
-                re.fullmatch(rf"\W*{re.escape(key)}\W*", raw.strip().lower())
+                re.fullmatch(rf"\W*{re.escape(key)}\W*", _span_text(raw).strip().lower())
                 for _, raw in spans
             ):
                 away.append(term)
@@ -1685,7 +1719,7 @@ def _prose_structure_checks(
     late, repeated = [], []
     seen: dict[str, int] = {}
     for start, raw in spans:
-        term = raw.strip().strip(".,;:!?()[]“”‘’")
+        term = _span_text(raw).strip().strip(".,;:!?()[]“”‘’")
         if len(term) < 3 or len(term.split()) > 6:
             continue
         key = term.lower()

@@ -1810,6 +1810,20 @@ def test_repeated_italics_still_flags_a_real_term():
     assert _named(checks, "terms_italicized_more_than_once")["detail"] == ["setpoint"]
 
 
+def test_italic_spans_line_up_with_the_rendered_text_after_a_link():
+    """A link renders as [text](url); italic offsets must count those characters."""
+    doc = {"body": {"content": [{"paragraph": {"elements": [
+        {"textRun": {"content": "See ", "textStyle": {}}},
+        {"textRun": {"content": "Tidy First", "textStyle": {"link": {"url": "http://x"}}}},
+        {"textRun": {"content": " on ", "textStyle": {}}},
+        {"textRun": {"content": "accretive", "textStyle": {"italic": True}}},
+        {"textRun": {"content": " growth.\n", "textStyle": {}}},
+    ]}}]}}
+    text = _extract_text(doc)
+    spans = _italic_spans(doc)
+    assert [text[start:start + len(raw)] for start, raw in spans] == ["accretive"]
+
+
 def test_prose_check_ignores_headings_when_locating_first_use():
     """A term named in a heading is not its first use; the body italics aren't late."""
     doc = {"body": {"content": [
