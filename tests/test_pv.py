@@ -713,8 +713,21 @@ def test_link_plan_builds_update_request():
     style = requests[0]["updateTextStyle"]
     assert style["range"] == {"startIndex": 9, "endIndex": 21}
     assert style["textStyle"]["link"]["url"] == "http://example.com"
-    assert style["fields"] == "link"
+    assert style["fields"] == "link,foregroundColor"
     assert spans == [{"start_index": 9, "end_index": 21}]
+
+
+def test_link_plan_applies_the_house_red_and_can_be_told_not_to():
+    """Links are set in the O'Reilly red by default; --no-color leaves them blue."""
+    doc = _fake_doc(_para(1, "See the Lean Startup here.\n"))
+    red = _link_plan(doc, "Lean Startup", "http://e")["requests"][0]["updateTextStyle"]
+    rgb = red["textStyle"]["foregroundColor"]["color"]["rgbColor"]
+    assert round(rgb["red"], 3) == round(0xD3 / 255, 3)
+    assert rgb["green"] == 0.0
+    assert round(rgb["blue"], 3) == round(0x2D / 255, 3)
+    plain = _link_plan(doc, "Lean Startup", "http://e", color=None)["requests"][0]
+    assert plain["updateTextStyle"]["fields"] == "link"
+    assert "foregroundColor" not in plain["updateTextStyle"]["textStyle"]
 
 def test_link_plan_missing_text_is_ambiguous():
     plan = _link_plan(_fake_doc(_para(1, "hello\n")), "zzz", "http://e")
@@ -1436,7 +1449,8 @@ def test_cite_plan_applies_italic_and_link():
     req = plan["requests"][0]["updateTextStyle"]
     assert req["textStyle"]["italic"] is True
     assert req["textStyle"]["link"]["url"] == "https://oreilly/x"
-    assert req["fields"] == "italic,link"
+    assert req["fields"] == "italic,link,foregroundColor"
+    assert req["textStyle"]["foregroundColor"]["color"]["rgbColor"]["green"] == 0.0
 
 
 def test_cite_plan_ambiguous_when_title_repeats():

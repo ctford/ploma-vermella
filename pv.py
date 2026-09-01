@@ -664,6 +664,11 @@ def _insert_before_plan(
     return {"kind": "ok", "request": request, "body_index": sel["body_index"]}
 
 
+# The author sets hyperlinks in the O'Reilly red rather than leaving them the default
+# blue, so `link` and `cite` apply it unless --no-color says otherwise.
+_LINK_COLOR = "d3002d"
+
+
 def _parse_hex_color(hex_color: str) -> dict:
     """Parse '#rrggbb' (or 'rrggbb') into a Docs API rgbColor (floats 0..1)."""
     h = hex_color.lstrip("#")
@@ -674,6 +679,16 @@ def _parse_hex_color(hex_color: str) -> dict:
         "green": int(h[2:4], 16) / 255,
         "blue": int(h[4:6], 16) / 255,
     }
+
+
+def _link_text_style(url: str, color: str | None) -> tuple[dict, str]:
+    """The textStyle + fields mask for a hyperlink, with the house color applied."""
+    style: dict = {"link": {"url": url}}
+    fields = "link"
+    if color:
+        style["foregroundColor"] = {"color": {"rgbColor": _parse_hex_color(color)}}
+        fields += ",foregroundColor"
+    return style, fields
 
 
 def _style_plan(
@@ -732,10 +747,12 @@ def _style_plan(
 
 def _link_plan(
     doc: dict, text: str, url: str, all_occurrences: bool = False,
-    occurrence: int | None = None,
+    occurrence: int | None = None, color: str | None = _LINK_COLOR,
 ) -> dict:
     """Build updateTextStyle requests that hyperlink occurrences of `text`.
 
+    `color` is a hex foreground applied alongside the link; pass None to leave the
+    span whatever color it already has (the default blue, for a fresh link).
     Returns {"kind": "ok", "requests": [...], "spans": [...]} or
     {"kind": "ambiguous", "result": <ambiguous payload>}.
     """
@@ -748,11 +765,12 @@ def _link_plan(
     if sel["kind"] == "ambiguous":
         return sel
     targets = sel["targets"]
+    style, fields = _link_text_style(url, color)
     requests = [
         {"updateTextStyle": {
             "range": {"startIndex": m["start_index"], "endIndex": m["end_index"]},
-            "textStyle": {"link": {"url": url}},
-            "fields": "link",
+            "textStyle": style,
+            "fields": fields,
         }}
         for m in targets
     ]
@@ -765,7 +783,7 @@ def _link_plan(
 
 def _cite_plan(
     doc: dict, title: str, url: str, all_occurrences: bool = False,
-    occurrence: int | None = None,
+    occurrence: int | None = None, color: str | None = _LINK_COLOR,
 ) -> dict:
     """Build requests that both italicize and hyperlink occurrences of `title`.
 
@@ -781,11 +799,14 @@ def _cite_plan(
     if sel["kind"] == "ambiguous":
         return sel
     targets = sel["targets"]
+    style, fields = _link_text_style(url, color)
+    style["italic"] = True
+    fields = "italic," + fields
     requests = [
         {"updateTextStyle": {
             "range": {"startIndex": m["start_index"], "endIndex": m["end_index"]},
-            "textStyle": {"italic": True, "link": {"url": url}},
-            "fields": "italic,link",
+            "textStyle": style,
+            "fields": fields,
         }}
         for m in targets
     ]
@@ -3178,7 +3199,7 @@ def insert_before(
 
 def link_text(
     doc_id_or_url: str, text: str, url: str, all_occurrences: bool = False,
-    occurrence: int | None = None,
+    occurrence: int | None = None, color: str | None = _LINK_COLOR,
 ) -> dict:
     """
     Hyperlink occurrences of `text` to `url`, preserving other text styling.
@@ -3190,7 +3211,9 @@ def link_text(
     doc_id = _extract_doc_id(doc_id_or_url)
     service = _docs_service()
     doc = service.documents().get(documentId=doc_id).execute()
-    plan = _link_plan(doc, text, url, all_occurrences=all_occurrences, occurrence=occurrence)
+    plan = _link_plan(
+        doc, text, url, all_occurrences=all_occurrences, occurrence=occurrence, color=color,
+    )
     if plan["kind"] == "ambiguous":
         return plan["result"]
     service.documents().batchUpdate(
@@ -3207,7 +3230,7 @@ def link_text(
 
 def cite_text(
     doc_id_or_url: str, title: str, url: str, all_occurrences: bool = False,
-    occurrence: int | None = None,
+    occurrence: int | None = None, color: str | None = _LINK_COLOR,
 ) -> dict:
     """
     Italicize and hyperlink a work title in one step — the book-citation pattern.
@@ -3217,7 +3240,9 @@ def cite_text(
     doc_id = _extract_doc_id(doc_id_or_url)
     service = _docs_service()
     doc = service.documents().get(documentId=doc_id).execute()
-    plan = _cite_plan(doc, title, url, all_occurrences=all_occurrences, occurrence=occurrence)
+    plan = _cite_plan(
+        doc, title, url, all_occurrences=all_occurrences, occurrence=occurrence, color=color,
+    )
     if plan["kind"] == "ambiguous":
         return plan["result"]
     service.documents().batchUpdate(
@@ -4380,6 +4405,14 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Link the Nth match (1-based) when TEXT matches several places.",
     )
+    p_link.add_argument(
+        "--color", metavar="HEX", default=_LINK_COLOR,
+        help=f"Link color (default {_LINK_COLOR}, the O'Reilly red).",
+    )
+    p_link.add_argument(
+        "--no-color", action="store_true",
+        help="Leave the link the document's default blue.",
+    )
 
     p_style = sub.add_parser(
         "style",
@@ -4421,6 +4454,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p_cite.add_argument(
         "--occurrence", type=int, default=None,
         help="Cite the Nth match (1-based) when TITLE appears several times.",
+    )
+    p_cite.add_argument(
+        "--color", metavar="HEX", default=_LINK_COLOR,
+        help=f"Link color (default {_LINK_COLOR}, the O'Reilly red).",
+    )
+    p_cite.add_argument(
+        "--no-color", action="store_true",
+        help="Leave the link the document's default blue.",
     )
 
     p_heading = sub.add_parser(
@@ -4604,6 +4645,7 @@ def main() -> None:
         result = link_text(
             args.doc, args.text, args.url,
             all_occurrences=args.all_occurrences, occurrence=args.occurrence,
+            color=None if args.no_color else args.color,
         )
     elif args.command == "style":
         tri = lambda on, off: True if on else (False if off else None)  # noqa: E731
@@ -4618,6 +4660,7 @@ def main() -> None:
         result = cite_text(
             args.doc, args.title, args.url,
             all_occurrences=args.all_occurrences, occurrence=args.occurrence,
+            color=None if args.no_color else args.color,
         )
     elif args.command == "heading":
         result = set_heading(
