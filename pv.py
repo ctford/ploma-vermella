@@ -1363,6 +1363,10 @@ _TIC_PHRASES = (
     "in order to", "the fact that", "able to", "the extent to which",
     "the ability of", "e.g.", "i.e.", " vs ", " vs.",
 )
+# Sarah recasts the -ly ordinals to the bare form wherever they open an item in a
+# numbered run ("Firstly, they limit…" -> "First, they limit…"). No legitimate use in
+# this book, so a plain substring count is enough.
+_ORDINAL_ADVERBS = ("firstly", "secondly", "thirdly", "fourthly", "fifthly")
 _UK_FORMS = (
     "artefact", "organisation", "judgement", "behaviour", "generalisation",
     "optimise", "customise", "analyse", "realise", "recognise", "destabilise",
@@ -1485,7 +1489,11 @@ def _prose_text_checks(text: str, phrases: list[str] | None = None) -> list[dict
     ))
 
     lowered = text.lower()
-    for name, needles in (("tic_phrases", _TIC_PHRASES), ("uk_spellings", _UK_FORMS)):
+    for name, needles in (
+        ("tic_phrases", _TIC_PHRASES),
+        ("uk_spellings", _UK_FORMS),
+        ("ordinal_adverbs", _ORDINAL_ADVERBS),
+    ):
         found = [f"{n.strip()}x{lowered.count(n)}" for n in needles if lowered.count(n)]
         checks.append(_check(name, "ok" if not found else "review", len(found), "0", found))
 

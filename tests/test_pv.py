@@ -1664,6 +1664,13 @@ def test_prose_text_checks_finds_passives_tics_and_uk_forms():
     assert "artefactx1" in _named(checks, "uk_spellings")["detail"]
 
 
+def test_prose_text_checks_flags_ly_ordinals_and_spares_the_bare_form():
+    """Sarah recasts Firstly/Secondly to First/Second; the bare form must not flag."""
+    text = "Firstly, it limits work. Secondly, it traces back. First, check the bare form."
+    detail = _named(_prose_text_checks(text), "ordinal_adverbs")["detail"]
+    assert detail == ["firstlyx1", "secondlyx1"]
+
+
 def test_uk_watchlist_catches_doubled_l_but_spares_final_stress():
     """UK doubles a final L; US only when the stress is on the last syllable."""
     checks = _prose_text_checks("Threat modelling of a controlled, compelled system.")
