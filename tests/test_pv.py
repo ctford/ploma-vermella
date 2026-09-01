@@ -14,6 +14,7 @@ from pv import (
     _block_html,
     _blocks_to_xhtml,
     _body_element_at,
+    _body_paragraphs,
     _build_parser,
     _bullets_plan,
     _chapter_filename,
@@ -1810,6 +1811,26 @@ def test_repeated_italics_still_flags_a_real_term():
     ])]}}
     checks = _prose_check_from_doc(doc)["checks"]
     assert _named(checks, "terms_italicized_more_than_once")["detail"] == ["setpoint"]
+
+
+def test_paragraph_length_skips_headings_bullets_and_fragments():
+    """Only running prose counts: a heading, a list item and a stub are not paragraphs."""
+    def para(text, style="NORMAL_TEXT", bullet=False):
+        p = {"paragraphStyle": {"namedStyleType": style},
+             "elements": [{"textRun": {"content": text, "textStyle": {}}}]}
+        if bullet:
+            p["bullet"] = {"listId": "l1"}
+        return {"paragraph": p}
+    body = " ".join(["word"] * 50) + "\n"
+    doc = {"body": {"content": [
+        para("A heading that runs to several words here\n", style="HEADING_1"),
+        para(body),
+        para("a bulleted item of some length here\n", bullet=True),
+        para("Too short\n"),
+    ]}}
+    assert _body_paragraphs(doc) == [body.strip()]
+    checks = _prose_structure_checks(doc, body)
+    assert _named(checks, "paragraph_length_mean")["value"] == 50.0
 
 
 def test_italic_spans_line_up_with_the_rendered_text_after_a_link():

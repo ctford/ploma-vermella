@@ -77,7 +77,7 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
 .venv/bin/pv shade <doc-url> <start> <end> [--color HEX] [--all] [--remove]  # shade a delimited
                                                        # block's paragraphs (e.g. <sidebar>…</sidebar>); --all does every pair in the doc
 .venv/bin/pv prose-check <doc-url> [--terms PATH] [--chapter CH] [--phrases PATH]  # mechanical style sweep: sentence length, em-dash density,
-                                                       # passives, tics, UK forms, -ly ordinals, first-use italics, stacked headings, figure refs.
+                                                       # passives, tics, UK forms, -ly ordinals, paragraph length, first-use italics, stacked headings, figure refs.
                                                        # --chapter scopes the italics rule per-book: a term introduced in another
                                                        # chapter should be plain here, not italicized again
 .venv/bin/pv suggestions <doc-url>                     # list an editor's suggested edits as per-paragraph before→after deltas

@@ -1604,6 +1604,32 @@ def _span_text(raw: str) -> str:
     return raw
 
 
+def _body_paragraphs(doc: dict) -> list[str]:
+    """Running-prose paragraphs: no headings, no list items, no one-line fragments.
+
+    Paragraph length is a separate rule from sentence length — a chapter can hold its
+    sentences to target and still land the reader in 70-word blocks. Chapter 7, the one
+    chapter that completed a full round trip with the editor, averages 53 words, which
+    is where the target band comes from.
+    """
+    paras = []
+    for element in doc.get("body", {}).get("content", []):
+        paragraph = element.get("paragraph")
+        if not paragraph or paragraph.get("bullet"):
+            continue
+        style = (paragraph.get("paragraphStyle") or {}).get(
+            "namedStyleType", "NORMAL_TEXT"
+        )
+        if style != "NORMAL_TEXT":
+            continue
+        text = _render_para_elements(paragraph.get("elements", [])).strip()
+        if text == _REVIEW_HEADING:
+            break
+        if len(text.split()) >= 5:
+            paras.append(text)
+    return paras
+
+
 def _prose_only(doc: dict, text: str) -> str:
     """`text` with title and heading paragraphs blanked out, offsets preserved.
 
@@ -1701,6 +1727,15 @@ def _prose_structure_checks(
 ) -> list[dict]:
     """Checks that need the document structure, not just its characters."""
     checks = []
+
+    body_paras = _body_paragraphs(doc)
+    if body_paras:
+        mean_para = sum(len(p.split()) for p in body_paras) / len(body_paras)
+        checks.append(_check(
+            "paragraph_length_mean", "ok" if 45 <= mean_para <= 62 else "review",
+            round(mean_para, 1), "45-62 words per body paragraph",
+            [f"{len(body_paras)} body paragraphs"],
+        ))
 
     spans = _italic_spans(doc)
     prose = _prose_only(doc, text)
