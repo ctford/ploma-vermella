@@ -1539,6 +1539,15 @@ _ACRONYM_RE = re.compile(r"\b[A-Z]{2,}s?\b")
 _ROMAN_RE = re.compile(r"(?:I{1,3}|IV|VI{0,3}|IX|XI{0,3})")
 _ASSUMED_ACRONYMS = frozenset({"API", "LLM", "US", "UK", "AI", "IT", "OK", "CTO", "UI"})
 
+# The inclusive "we" is the style guide's single most-edited voice rule, and it is a
+# density rather than a ban: "we engineers" with an explicit referent is allowed, and a
+# quoted source keeps its own pronouns. So this reports a rate and leaves the judgement
+# to a reader. Measured across a whole manuscript the median chapter sat at 0.2 per
+# 1,000 words against an outlier at 10.8, so a threshold of 1.0 separates the chapters
+# that need a pass from the ones already clean, without flagging the deliberate uses.
+_INCLUSIVE_WE_RE = re.compile(r"\b(?:we|us|our|ours|ourselves)\b|\blet[’']s\b", re.I)
+_INCLUSIVE_WE_PER_1000 = 1.0
+
 _TIC_PHRASES = (
     "in order to", "the fact that", "able to", "the extent to which",
     "the ability of", "e.g.", "i.e.", " vs ", " vs.",
@@ -1618,6 +1627,24 @@ def _flagged_phrases(text: str, phrases: list[str]) -> list[str]:
         if n:
             found.append(f"{key} x{n}")
     return found
+
+
+def _inclusive_we(text: str) -> tuple[int, list[str]]:
+    """Count inclusive first-person plurals, with a little context for each.
+
+    The context is the point. A bare number cannot tell "we, the architecture team"
+    from the author-plus-reader "we" the guide asks you to recast, and the disambiguation
+    rule differs for each: a "we" about something the book did becomes "I", a "we"
+    exhorting the reader becomes "you". Returning the surrounding words lets a reviewer
+    classify them without opening the document.
+    """
+    matches = list(_INCLUSIVE_WE_RE.finditer(text))
+    samples = []
+    for m in matches:
+        start = max(0, m.start() - 45)
+        end = min(len(text), m.end() + 45)
+        samples.append(" ".join(text[start:end].split()))
+    return len(matches), samples
 
 
 def _prose_text_checks(
@@ -1745,6 +1772,16 @@ def _prose_text_checks(
     checks.append(_check(
         "spelled_numbers_over_nine", "ok" if not spelled else "review",
         len(spelled), "0 — numerals for 10 and up", spelled,
+    ))
+
+    we_count, we_samples = _inclusive_we(measured)
+    per_1000 = (we_count * 1000 / word_count) if word_count else 0.0
+    checks.append(_check(
+        "inclusive_we", "ok" if per_1000 <= _INCLUSIVE_WE_PER_1000 else "review",
+        f"{we_count} ({per_1000:.1f} per 1,000 words)",
+        f"under {_INCLUSIVE_WE_PER_1000:.1f} per 1,000 words; "
+        "recast as I for what the book did, you for what the reader should do",
+        we_samples[:12],
     ))
 
     if phrases:

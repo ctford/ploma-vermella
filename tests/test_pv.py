@@ -1643,6 +1643,34 @@ def _check_para(elements, style="NORMAL_TEXT"):
     }}
 
 
+def test_inclusive_we_reports_a_density_not_a_ban():
+    """A stray "we" in a long chapter is fine; a chapter built on it is not."""
+    # One instance in a chapter-sized run of prose stays under the threshold.
+    clean = ("You should tell the agent what good looks like. " * 130) + "We agreed."
+    assert _named(_prose_text_checks(clean), "inclusive_we")["status"] == "ok"
+
+    heavy = "We carve our problem into pieces so we can iterate on it ourselves. " * 8
+    check = _named(_prose_text_checks(heavy), "inclusive_we")
+    assert check["status"] == "review"
+    assert "per 1,000 words" in check["value"]
+
+
+def test_inclusive_we_catches_contractions_and_let_us():
+    """"we're" and "let's" are the same voice problem as a bare "we"."""
+    text = "We\u2019re going to ship it, so let\u2019s agree on our approach."
+    check = _named(_prose_text_checks(text), "inclusive_we")
+    assert check["status"] == "review"
+    # we're, let's, our
+    assert check["value"].startswith("3 ")
+
+
+def test_inclusive_we_gives_context_so_a_reviewer_can_classify():
+    """The disambiguation rule differs per instance, so a bare count is not enough."""
+    text = "We saw in Part III that agents drift. " * 6
+    detail = _named(_prose_text_checks(text), "inclusive_we")["detail"]
+    assert detail and all("saw in Part III" in d for d in detail)
+
+
 def test_prose_text_checks_flags_long_sentences_and_mean():
     checks = _prose_text_checks(" ".join(["word"] * 40) + ".")
     assert _named(checks, "sentences_over_35_words")["value"].startswith("1 ")
