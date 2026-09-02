@@ -1960,6 +1960,21 @@ def test_paragraph_length_skips_headings_bullets_and_fragments():
     assert _body_paragraphs(doc) == [body.strip()]
     checks = _prose_structure_checks(doc, body)
     assert _named(checks, "paragraph_length_mean")["value"] == 50.0
+    assert _named(checks, "paragraphs_over_120_words")["value"] == 0
+
+
+def test_paragraph_check_gates_on_the_120_word_ceiling_not_the_mean():
+    """The work's rule is a ceiling per paragraph; a good mean can hide a long one."""
+    def para(text):
+        return {"paragraph": {"paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                              "elements": [{"textRun": {"content": text, "textStyle": {}}}]}}
+    short = " ".join(["word"] * 10) + "\n"
+    long_one = " ".join(["word"] * 150) + "\n"
+    doc = {"body": {"content": [para(short)] * 5 + [para(long_one)]}}
+    checks = _prose_structure_checks(doc, short * 5 + long_one)
+    assert _named(checks, "paragraph_length_mean")["status"] == "ok", "mean is reported only"
+    over = _named(checks, "paragraphs_over_120_words")
+    assert over["value"] == 1 and over["status"] == "review"
 
 
 def test_italic_spans_line_up_with_the_rendered_text_after_a_link():

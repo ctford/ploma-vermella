@@ -1516,6 +1516,7 @@ _LONG_SENTENCE_WORDS = 35
 _SENTENCE_MEAN_TARGET = (20.0, 24.0)
 _EM_DASH_WORDS_PER = 150
 _EM_DASH_WORDS_MAX = 200
+_PARAGRAPH_MAX_WORDS = 120
 # Long sentences and nested asides are tolerated at a rate, not banned. Both
 # thresholds are Sarah Grey's demonstrated bar, measured on Chapter 7 — the one
 # chapter she has reviewed and signed off — which carries 46 sentences over 35
@@ -1946,11 +1947,22 @@ def _prose_structure_checks(
 
     body_paras = _body_paragraphs(doc)
     if body_paras:
+        # The work's own rule is a ceiling on the individual paragraph, not a target
+        # for the average: "flag paragraphs over 120 words as likely needing to be
+        # split or tightened". A mean says nothing about the paragraph that lost the
+        # reader, and a chapter can hit any average you like while burying 160-word
+        # blocks in it.
+        over = [p for p in body_paras if len(p.split()) > _PARAGRAPH_MAX_WORDS]
         mean_para = sum(len(p.split()) for p in body_paras) / len(body_paras)
         checks.append(_check(
-            "paragraph_length_mean", "ok" if 45 <= mean_para <= 62 else "review",
-            round(mean_para, 1), "45-62 words per body paragraph",
-            [f"{len(body_paras)} body paragraphs"],
+            "paragraphs_over_120_words", "ok" if not over else "review", len(over),
+            f"0 — split or tighten anything past {_PARAGRAPH_MAX_WORDS} words",
+            [f"{len(p.split())}w: {p[:70]}" for p in sorted(
+                over, key=lambda x: -len(x.split()))[:5]],
+        ))
+        checks.append(_check(
+            "paragraph_length_mean", "ok", round(mean_para, 1),
+            f"reported, not gated ({len(body_paras)} body paragraphs)",
         ))
 
     spans = _italic_spans(doc)
