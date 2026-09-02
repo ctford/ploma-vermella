@@ -3010,12 +3010,12 @@ def resolve_all_comments(doc_id_or_url: str) -> dict:
     """Resolve every unresolved comment on the document."""
     doc_id = _extract_doc_id(doc_id_or_url)
     service = _drive_service()
-    listing = service.comments().list(
-        fileId=doc_id,
-        fields="comments(id,resolved)",
-        includeDeleted=False,
-    ).execute()
-    unresolved = [c["id"] for c in listing.get("comments", []) if not c.get("resolved")]
+    # Page through via the shared fetcher. This used to make its own single
+    # comments().list() call, which takes the API's default page size of 20 — on a
+    # document with 49 comments it resolved the unresolved ones in the first page,
+    # reported success, and silently left the rest. Seen on Chapter 8, 2026-09-02:
+    # 14 unresolved, "resolved_all: 10", 4 still open, and a second run found none.
+    unresolved = [c["id"] for c in _fetch_comments(doc_id) if not c.get("resolved")]
     for comment_id in unresolved:
         service.replies().create(
             fileId=doc_id,

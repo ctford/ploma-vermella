@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+import pv
 from pv import (
     _assign_parts,
     _block_html,
@@ -1684,6 +1685,45 @@ def test_prose_text_checks_em_dash_density_is_a_two_sided_band():
     assert _named(_prose_text_checks(sparse), "em_dash_density")["status"] == "review"
     in_band = " ".join(["word"] * 170) + " — one aside."
     assert _named(_prose_text_checks(in_band), "em_dash_density")["status"] == "ok"
+
+
+def test_resolve_all_uses_the_paginating_fetcher(monkeypatch):
+    """Resolve-all must see every page, not just the API's default first 20."""
+    pages = [
+        {"comments": [{"id": "a", "resolved": False}], "nextPageToken": "t2"},
+        {"comments": [{"id": "b", "resolved": False}, {"id": "c", "resolved": True}]},
+    ]
+    calls = {"list": 0, "resolved": []}
+
+    class FakeReplies:
+        def create(self, **kwargs):
+            calls["resolved"].append(kwargs["commentId"])
+            return self
+
+        def execute(self):
+            return {"id": "r"}
+
+    class FakeComments:
+        def list(self, **kwargs):
+            self._page = pages[calls["list"]]
+            calls["list"] += 1
+            return self
+
+        def execute(self):
+            return self._page
+
+    class FakeService:
+        def comments(self):
+            return FakeComments()
+
+        def replies(self):
+            return FakeReplies()
+
+    monkeypatch.setattr(pv, "_drive_service", lambda: FakeService())
+    result = pv.resolve_all_comments("https://docs.google.com/document/d/abc123")
+    assert calls["list"] == 2, "should have followed nextPageToken"
+    assert sorted(calls["resolved"]) == ["a", "b"]
+    assert result["count"] == 2
 
 
 def test_needles_match_on_word_boundaries():
