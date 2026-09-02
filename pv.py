@@ -1548,6 +1548,20 @@ _ASSUMED_ACRONYMS = frozenset({"API", "LLM", "US", "UK", "AI", "IT", "OK", "CTO"
 _INCLUSIVE_WE_RE = re.compile(r"\b(?:we|us|our|ours|ourselves)\b|\blet[’']s\b", re.I)
 _INCLUSIVE_WE_PER_1000 = 1.0
 
+# Guides, Guards, Sensors and Checks are capitalized defined terms — settled with the
+# editor after a draft was flagged as "a bit inconsistent with whether or not to
+# capitalize these terms". They are also ordinary English words, so searching for a bare
+# lowercase "checks" or "guides" hits every verb and is unusable. The enumeration is the
+# signal that survives: two or more of the four inside one short span is always the
+# taxonomy being named, never "the linter checks the code". That pattern is where the
+# lowercase slip actually happens, in whole runs at a time.
+_HARNESS_ROLE_RE = re.compile(r"\b(guides?|guards?|sensors?|checks?)\b", re.I)
+# Proximity alone is not enough — "a diagram guides the developer … the pipeline guards
+# against regressions" puts two roles within a sentence of each other and means neither.
+# What identifies the taxonomy is that the roles are joined by list punctuation and
+# nothing else.
+_HARNESS_LIST_JOIN_RE = re.compile(r"^[\s,;/]*(?:and|or)?[\s,;/]*$", re.I)
+
 _TIC_PHRASES = (
     "in order to", "the fact that", "able to", "the extent to which",
     "the ability of", "e.g.", "i.e.", " vs ", " vs.",
@@ -1645,6 +1659,41 @@ def _inclusive_we(text: str) -> tuple[int, list[str]]:
         end = min(len(text), m.end() + 45)
         samples.append(" ".join(text[start:end].split()))
     return len(matches), samples
+
+
+def _harness_role_case(text: str) -> list[str]:
+    """Enumerations of the four harness roles that lowercase one or more of them.
+
+    A run is a sequence of roles joined by list punctuation alone, naming two or more
+    distinct roles. Both halves matter. Requiring a list is what keeps the check off the
+    verbs — "a diagram guides the developer … the pipeline guards against regressions"
+    has two roles a few words apart and means neither, so proximity is not enough.
+    Requiring two distinct roles keeps it off "the checks ran, and further checks
+    confirmed it". The trade is that a lone lowercase role in running prose goes
+    unreported, which is acceptable: the measured defect is whole enumerations in lower
+    case, and a bare search for "checks" would report every use of the verb.
+    """
+    matches = list(_HARNESS_ROLE_RE.finditer(text))
+    hits: list[str] = []
+    run: list[re.Match] = []
+
+    def flush(run: list[re.Match]) -> None:
+        roles = {m.group(1).lower().rstrip("s") for m in run}
+        if len(roles) < 2 or not any(m.group(1)[0].islower() for m in run):
+            return
+        start = max(0, run[0].start() - 25)
+        end = min(len(text), run[-1].end() + 25)
+        hits.append(" ".join(text[start:end].split()))
+
+    for m in matches:
+        joined = run and _HARNESS_LIST_JOIN_RE.match(text[run[-1].end():m.start()])
+        if run and not joined:
+            flush(run)
+            run = []
+        run.append(m)
+    if run:
+        flush(run)
+    return hits
 
 
 def _prose_text_checks(
@@ -1772,6 +1821,14 @@ def _prose_text_checks(
     checks.append(_check(
         "spelled_numbers_over_nine", "ok" if not spelled else "review",
         len(spelled), "0 — numerals for 10 and up", spelled,
+    ))
+
+    role_case = _harness_role_case(measured)
+    checks.append(_check(
+        "harness_roles_capitalized", "ok" if not role_case else "review",
+        len(role_case),
+        "0 — Guides, Guards, Sensors and Checks are capitalized defined terms",
+        role_case[:12],
     ))
 
     we_count, we_samples = _inclusive_we(measured)

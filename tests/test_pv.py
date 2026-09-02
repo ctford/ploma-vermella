@@ -1643,6 +1643,44 @@ def _check_para(elements, style="NORMAL_TEXT"):
     }}
 
 
+def test_harness_roles_flag_a_lowercase_enumeration():
+    """The measured defect is whole runs set in lower case, not isolated slips."""
+    text = "It provides services that cross-cut guides, guards, sensors, and checks."
+    check = _named(_prose_text_checks(text), "harness_roles_capitalized")
+    assert check["status"] == "review"
+    assert "guides, guards, sensors, and checks" in check["detail"][0]
+
+
+def test_harness_roles_accept_a_capitalized_enumeration():
+    text = "Your combination of Guides, Guards, Sensors, and Checks lowers the cost."
+    assert _named(
+        _prose_text_checks(text), "harness_roles_capitalized")["status"] == "ok"
+
+
+def test_harness_roles_ignore_the_ordinary_verbs():
+    """"checks" and "guides" are common words; a bare search for them is unusable."""
+    text = (
+        "The linter checks the code before it lands. An architecture diagram guides "
+        "the developer to the right module. The pipeline guards against regressions."
+    )
+    assert _named(
+        _prose_text_checks(text), "harness_roles_capitalized")["status"] == "ok"
+
+
+def test_harness_roles_need_two_distinct_roles_in_one_run():
+    """One role repeated is prose about that role, not the taxonomy being named."""
+    text = "The checks ran, and further checks confirmed it. Later checks passed too."
+    assert _named(
+        _prose_text_checks(text), "harness_roles_capitalized")["status"] == "ok"
+
+
+def test_harness_roles_flag_a_partly_lowercased_run():
+    """A mixed run is the slip mid-sentence the editor flagged."""
+    text = "Unlike Guides, guards come with a verdict on what is acceptable."
+    assert _named(
+        _prose_text_checks(text), "harness_roles_capitalized")["status"] == "review"
+
+
 def test_inclusive_we_reports_a_density_not_a_ban():
     """A stray "we" in a long chapter is fine; a chapter built on it is not."""
     # One instance in a chapter-sized run of prose stays under the threshold.
