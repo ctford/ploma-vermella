@@ -1734,6 +1734,32 @@ def test_prose_metrics_ignore_a_rendered_table():
     assert counted != honest, "the table must not be able to move the prose measure"
 
 
+def test_extract_blocks_keeps_tables():
+    """Tables have no `paragraph` key, so the loop used to skip them entirely."""
+    def cell(text):
+        return {"content": [{"paragraph": {"elements": [
+            {"textRun": {"content": text, "textStyle": {}}}]}}]}
+    doc = {"body": {"content": [
+        {"paragraph": {"elements": [{"textRun": {"content": "Before.\n", "textStyle": {}}}]}},
+        {"table": {"tableRows": [
+            {"tableCells": [cell("Thread"), cell("Chapters")]},
+            {"tableCells": [cell("Control theory"), cell("4, 5, 6")]},
+        ]}},
+    ]}}
+    blocks = _extract_blocks(doc)
+    kinds = [b["type"] for b in blocks]
+    assert kinds == ["paragraph", "table"]
+    assert blocks[1]["rows"] == [["Thread", "Chapters"], ["Control theory", "4, 5, 6"]]
+
+
+def test_blocks_to_xhtml_renders_a_table_with_a_header_row():
+    blocks = [{"type": "table", "rows": [["Thread", "Chapters"], ["Control theory", "4, 5"]]}]
+    out = _blocks_to_xhtml("Conclusion", blocks)
+    assert "<table>" in out and "</table>" in out
+    assert "<th>Thread</th><th>Chapters</th>" in out
+    assert "<td>Control theory</td><td>4, 5</td>" in out
+
+
 def test_insert_table_plan_places_and_validates():
     doc = _fake_doc(_para(1, "Anchor paragraph.\n"), _para(20, "After.\n"))
     plan = _insert_table_plan(doc, "Anchor", [["a", "b"], ["c", "d"]])

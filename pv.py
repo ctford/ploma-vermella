@@ -2184,9 +2184,31 @@ def _extract_blocks(doc: dict) -> list[dict]:
     - {"type": "paragraph", "text": "...", "html": "..."}
     - {"type": "list_item", "text": "...", "html": "..."}
     - {"type": "image", "object_id": "..."}
+    - {"type": "table", "rows": [[cell html, ...], ...]}
+
+    Tables were silently dropped until 2026-09-02: they are body elements without a
+    `paragraph` key, so the loop skipped them and a chapter's tables reached readers as
+    nothing at all, with only their caption left behind.
     """
     blocks = []
     for element in doc.get("body", {}).get("content", []):
+        table = element.get("table")
+        if table:
+            rows = [
+                [
+                    "".join(
+                        _inline_html(cell_el.get("paragraph", {}).get("elements", []))
+                        for cell_el in cell.get("content", [])
+                        if cell_el.get("paragraph")
+                    ).strip()
+                    for cell in row.get("tableCells", [])
+                ]
+                for row in table.get("tableRows", [])
+            ]
+            if any(any(cell for cell in row) for row in rows):
+                blocks.append({"type": "table", "rows": rows})
+            continue
+
         paragraph = element.get("paragraph")
         if not paragraph:
             continue
@@ -2360,7 +2382,16 @@ def _blocks_to_xhtml(title: str, blocks: list[dict], image_paths: dict | None = 
             parts.append("</ul>")
             in_list = False
 
-        if block_type == "image":
+        if block_type == "table":
+            rows = block.get("rows") or []
+            head, *body = rows
+            cells = "".join(f"<th>{c}</th>" for c in head)
+            out = [f"<table><thead><tr>{cells}</tr></thead><tbody>"]
+            for row in body:
+                out.append("<tr>" + "".join(f"<td>{c}</td>" for c in row) + "</tr>")
+            out.append("</tbody></table>")
+            parts.append("".join(out))
+        elif block_type == "image":
             href = image_paths.get(block.get("object_id"))
             if href:
                 src = html.escape(href, quote=True)
@@ -3829,6 +3860,11 @@ def build_epub(
         "section { max-width: 42em; margin: 0 auto; }\n"
         "p, li { margin: 0.6em 0; }\n"
         "figure { margin: 1em 0; text-align: center; }\n"
+        "table { border-collapse: collapse; margin: 1em 0; width: 100%; "
+        "font-size: 0.9em; }\n"
+        "th, td { border: 1px solid #bbb; padding: 0.35em 0.5em; "
+        "text-align: left; vertical-align: top; }\n"
+        "th { background: #f0f0f0; font-family: sans-serif; }\n"
         "img { max-width: 100%; height: auto; }\n"
         ".titlepage { text-align: center; margin-top: 20%; }\n"
         ".cover-titlepage { text-align: center; max-width: none; padding-top: 8%; }\n"
