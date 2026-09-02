@@ -2385,7 +2385,11 @@ def _blocks_to_xhtml(title: str, blocks: list[dict], image_paths: dict | None = 
         if block_type == "table":
             rows = block.get("rows") or []
             head, *body = rows
-            cells = "".join(f"<th>{c}</th>" for c in head)
+            # The header row is usually bold in the Doc, and <th> is already
+            # emphasised — keep one of the two, not both.
+            cells = "".join(
+                f"<th>{re.sub(r'</?strong>', '', c)}</th>" for c in head
+            )
             out = [f"<table><thead><tr>{cells}</tr></thead><tbody>"]
             for row in body:
                 out.append("<tr>" + "".join(f"<td>{c}</td>" for c in row) + "</tr>")

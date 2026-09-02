@@ -1757,6 +1757,8 @@ def test_blocks_to_xhtml_renders_a_table_with_a_header_row():
     out = _blocks_to_xhtml("Conclusion", blocks)
     assert "<table>" in out and "</table>" in out
     assert "<th>Thread</th><th>Chapters</th>" in out
+    bold = [{"type": "table", "rows": [["<strong>Thread</strong>"], ["a"]]}]
+    assert "<th>Thread</th>" in _blocks_to_xhtml("C", bold), "th is already emphasised"
     assert "<td>Control theory</td><td>4, 5</td>" in out
 
 
