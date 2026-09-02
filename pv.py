@@ -1577,8 +1577,17 @@ _EMPHASIS_WORDS = frozenset({
 
 
 def _sentences(text: str) -> list[str]:
-    """Split prose into sentences. Crude but stable — good enough to count."""
-    return [s for s in _SENTENCE_SPLIT.split(text) if s.strip()]
+    """Split prose into sentences. Crude but stable — good enough to count.
+
+    A paragraph break always ends a sentence, whatever punctuation is or isn't there.
+    Without that, list items run together: the house rule is that a fragment bullet
+    takes no full stop, so a six-item list counted as one 86-word sentence and tripped
+    the runaway-sentence gate.
+    """
+    out = []
+    for line in text.split("\n"):
+        out.extend(s for s in _SENTENCE_SPLIT.split(line) if s.strip())
+    return out
 
 
 def _check(name: str, status: str, value, target, detail=None) -> dict:

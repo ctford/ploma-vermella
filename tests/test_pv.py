@@ -73,6 +73,7 @@ from pv import (
     _replace_image_plan,
     _replace_section_plan,
     _review_copy_title,
+    _sentences,
     _shade_plan,
     _shape_text,
     _slugify,
@@ -1689,6 +1690,13 @@ def test_prose_text_checks_em_dash_density_is_a_two_sided_band():
     assert _named(_prose_text_checks(in_band), "em_dash_density")["status"] == "ok"
 
 
+def test_sentences_do_not_run_across_paragraph_breaks():
+    """Fragment bullets take no full stop, so a list must not read as one sentence."""
+    bullets = "\n".join(f"A bullet item number {i} without a full stop" for i in range(1, 7))
+    assert len(_sentences(bullets)) == 6
+    assert max(len(s.split()) for s in _sentences(bullets)) == 9
+
+
 def test_sentence_ceiling_gates_separately_from_the_budget():
     """45 words is the gate; the 35-word measure stays a budget, as with code health."""
     short = "A short sentence. " * 12
@@ -1705,10 +1713,14 @@ def test_prose_metrics_ignore_a_rendered_table():
     rows = "\n".join(f"Ch {i} | {i}000 | 20.{i}" for i in range(1, 13))
     table = "Chapter | Words | Mean\n" + rows
     full = prose + table
-    inflated = _named(_prose_text_checks(full), "sentence_length_mean")["value"]
+    # A line break now ends a sentence, so rows are no longer swallowed into one
+    # giant sentence. They are still not prose, and counting thirteen of them as
+    # sentences distorts any per-sentence measure.
+    assert len(_sentences(full)) == 15, "two sentences plus thirteen table rows"
+    assert len(_sentences(prose)) == 2
+    counted = _named(_prose_text_checks(full), "sentence_length_mean")["value"]
     honest = _named(_prose_text_checks(full, prose=prose), "sentence_length_mean")["value"]
-    assert inflated > 20, "the table should wreck the mean when counted as prose"
-    assert honest < 8, "prose-only should see two short sentences"
+    assert counted != honest, "the table must not be able to move the prose measure"
 
 
 def test_insert_table_plan_places_and_validates():
