@@ -1518,6 +1518,10 @@ _EM_DASH_WORDS_PER = 150
 _EM_DASH_WORDS_MAX = 200
 _PARAGRAPH_MAX_WORDS = 120
 _SENTENCE_MAX_WORDS = 45
+# A tolerance, not a ceiling: the author's own target is that runaway sentences and
+# paragraphs stay under 2% each, rather than never occurring. Gate the shape, tolerate
+# a residue — the two-tier idea the book argues for, applied to its own prose.
+_RUNAWAY_TOLERANCE = 2.0
 # Long sentences and nested asides are tolerated at a rate, not banned. Both
 # thresholds are Sarah Grey's demonstrated bar, measured on Chapter 7 — the one
 # chapter she has reviewed and signed off — which carries 46 sentences over 35
@@ -1669,9 +1673,12 @@ def _prose_text_checks(
     # budget; 45 words is where a sentence has genuinely got away, and it flags 4.1% —
     # the same rate as the 120-word paragraph rule it mirrors.
     runaway = [s for s in sentences if len(s.split()) > _SENTENCE_MAX_WORDS]
+    rate = 100 * len(runaway) / len(sentences) if sentences else 0
     checks.append(_check(
-        "sentences_over_45_words", "ok" if not runaway else "review", len(runaway),
-        f"0 — split anything past {_SENTENCE_MAX_WORDS} words",
+        "sentences_over_45_words",
+        "ok" if rate < _RUNAWAY_TOLERANCE else "review",
+        f"{len(runaway)} ({rate:.1f}%)",
+        f"under {_RUNAWAY_TOLERANCE}% of sentences",
         [f"{len(s.split())}w: {s[:90]}" for s in sorted(
             runaway, key=lambda x: -len(x.split()))[:5]],
     ))
@@ -1976,10 +1983,13 @@ def _prose_structure_checks(
         # reader, and a chapter can hit any average you like while burying 160-word
         # blocks in it.
         over = [p for p in body_paras if len(p.split()) > _PARAGRAPH_MAX_WORDS]
+        rate = 100 * len(over) / len(body_paras)
         mean_para = sum(len(p.split()) for p in body_paras) / len(body_paras)
         checks.append(_check(
-            "paragraphs_over_120_words", "ok" if not over else "review", len(over),
-            f"0 — split or tighten anything past {_PARAGRAPH_MAX_WORDS} words",
+            "paragraphs_over_120_words",
+            "ok" if rate < _RUNAWAY_TOLERANCE else "review",
+            f"{len(over)} ({rate:.1f}%)",
+            f"under {_RUNAWAY_TOLERANCE}% of paragraphs",
             [f"{len(p.split())}w: {p[:70]}" for p in sorted(
                 over, key=lambda x: -len(x.split()))[:5]],
         ))

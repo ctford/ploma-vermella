@@ -1703,8 +1703,19 @@ def test_sentence_ceiling_gates_separately_from_the_budget():
     runaway = " ".join(["word"] * 50) + "."
     checks = _prose_text_checks(short + runaway)
     gate = _named(checks, "sentences_over_45_words")
-    assert gate["value"] == 1 and gate["status"] == "review"
+    assert gate["value"].startswith("1 ") and gate["status"] == "review"
     assert _named(_prose_text_checks(short), "sentences_over_45_words")["status"] == "ok"
+
+
+def test_runaway_gate_is_a_tolerance_not_a_ceiling():
+    """Under 2% passes: one long sentence in a hundred is not a finding."""
+    many = "A short sentence here. " * 99
+    one_long = " ".join(["word"] * 50) + "."
+    ok = _named(_prose_text_checks(many + one_long), "sentences_over_45_words")
+    assert ok["status"] == "ok", "1 in 100 is inside the tolerance"
+    few = "A short sentence here. " * 20
+    bad = _named(_prose_text_checks(few + one_long), "sentences_over_45_words")
+    assert bad["status"] == "review", "1 in 21 is not"
 
 
 def test_prose_metrics_ignore_a_rendered_table():
@@ -1982,7 +1993,7 @@ def test_paragraph_length_skips_headings_bullets_and_fragments():
     assert _body_paragraphs(doc) == [body.strip()]
     checks = _prose_structure_checks(doc, body)
     assert _named(checks, "paragraph_length_mean")["value"] == 50.0
-    assert _named(checks, "paragraphs_over_120_words")["value"] == 0
+    assert _named(checks, "paragraphs_over_120_words")["value"].startswith("0 ")
 
 
 def test_paragraph_check_gates_on_the_120_word_ceiling_not_the_mean():
@@ -1996,7 +2007,7 @@ def test_paragraph_check_gates_on_the_120_word_ceiling_not_the_mean():
     checks = _prose_structure_checks(doc, short * 5 + long_one)
     assert _named(checks, "paragraph_length_mean")["status"] == "ok", "mean is reported only"
     over = _named(checks, "paragraphs_over_120_words")
-    assert over["value"] == 1 and over["status"] == "review"
+    assert over["value"].startswith("1 ") and over["status"] == "review"
 
 
 def test_italic_spans_line_up_with_the_rendered_text_after_a_link():
