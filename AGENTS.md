@@ -117,6 +117,17 @@ folder regardless of type, query the Drive API directly instead.
 Text matching (`edit`, `find`, `link`, `style`, `insert-after`) is **quote-agnostic**: curly and
 straight quotes/apostrophes match interchangeably, so you don't have to reproduce smart quotes exactly.
 
+**Match on the document's text, not on `pv fetch` output.** `fetch` renders a hyperlink as
+`[text](url)`; the document contains only `text`, with a link style on it. So an anchor copied
+out of `fetch` that spans a link never matches. Anchor before or after the linked span instead,
+and change a URL with `pv link` rather than by editing the markup. Measured 2026-09-02: 8 of 46
+scripted edits silently did nothing for exactly this reason.
+
+**A command that changes nothing exits non-zero.** `edit` and friends still print their
+structured `{"status": "ambiguous", ...}` result — that shape is the point, and the `options`
+tell you what to re-anchor on — but the exit code is 1, so a batch driver cannot report a
+silent no-op as a success. Check the `status` field, not just the exit code, when you care why.
+
 `edit` and `find` also match text **inside table cells** (they walk the body in reading order,
 descending into tables). Editing a table cell's text works like any other edit; inserting or
 deleting whole table rows/columns is still out of scope.

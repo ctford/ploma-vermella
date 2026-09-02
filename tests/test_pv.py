@@ -1644,6 +1644,21 @@ def _check_para(elements, style="NORMAL_TEXT"):
     }}
 
 
+def test_unapplied_statuses_cover_the_no_change_results():
+    """A structured "nothing happened" result must be distinguishable from success.
+
+    `pv edit` returns {"status": "ambiguous"} when the anchor does not match. That is a
+    deliberate result shape, but it printed and exited 0, so a batch driver testing the
+    exit code reported silent no-ops as applied edits.
+    """
+    from pv import _UNAPPLIED_STATUSES
+    assert "ambiguous" in _UNAPPLIED_STATUSES
+    assert "not_found" in _UNAPPLIED_STATUSES
+    assert "edited" not in _UNAPPLIED_STATUSES
+    assert "replaced" not in _UNAPPLIED_STATUSES
+    assert "linked" not in _UNAPPLIED_STATUSES
+
+
 def test_referenced_figures_expands_a_range():
     """"Figures 11-5 through 11-7" names three figures but only two numbers."""
     refs = _referenced_figures("See Figures 11-5 through 11-7 for the breakdown.")

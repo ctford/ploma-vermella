@@ -1511,6 +1511,11 @@ def _render_table(table: dict) -> str:
 # on purpose; they need a reader, not a regex.
 # ---------------------------------------------------------------------------
 
+# Statuses that mean the document was not changed. `ambiguous` is a deliberate result
+# shape, not an error — the caller is expected to read `options` and re-issue — but it is
+# still a failure to apply, and the exit code has to say so.
+_UNAPPLIED_STATUSES = frozenset({"ambiguous", "not_found", "no_match"})
+
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 _LONG_SENTENCE_WORDS = 35
 _SENTENCE_MEAN_TARGET = (20.0, 24.0)
@@ -5223,6 +5228,14 @@ def main() -> None:
         result = append_review_note(args.doc, args.quoted_text, args.comment)
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
+    if isinstance(result, dict) and result.get("status") in _UNAPPLIED_STATUSES:
+        # A command that found nothing to change still prints its structured result —
+        # that shape is the point, and callers parse it. But it must not exit 0, because
+        # a batch driver testing the exit code then reports a silent no-op as a success.
+        # Measured: 8 of 46 scripted edits were reported as applied when none of them
+        # had matched, because every "old" string carried [text](url) link markup that
+        # the document itself does not contain.
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
