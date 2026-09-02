@@ -1686,6 +1686,22 @@ def test_prose_text_checks_em_dash_density_is_a_two_sided_band():
     assert _named(_prose_text_checks(in_band), "em_dash_density")["status"] == "ok"
 
 
+def test_needles_match_on_word_boundaries():
+    """'able to' must not fire on 'unable to', nor 'analyse' on the US plural 'analyses'."""
+    checks = _prose_text_checks("The team was unable to run the analyses it had planned.")
+    assert _named(checks, "tic_phrases")["value"] == 0
+    assert _named(checks, "uk_spellings")["value"] == 0
+    checks = _prose_text_checks("The team was able to run it, and analysed the artefact.")
+    assert "able tox1" in _named(checks, "tic_phrases")["detail"]
+    assert sorted(_named(checks, "uk_spellings")["detail"]) == ["analysedx1", "artefactx1"]
+
+
+def test_acronym_check_ignores_part_numbers():
+    """Part II and Part IV are numbers, not acronyms to spell out."""
+    checks = _prose_text_checks("Part II covers this, Part IV the rest, and the VPC stays.")
+    assert _named(checks, "acronyms_to_verify")["detail"] == ["VPC"]
+
+
 def test_spelling_checks_skip_code_paragraphs_and_captions():
     """A UK spelling inside a code snippet is the snippet's, not a correction to make."""
     def para(text, mono=False):

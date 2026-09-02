@@ -1392,6 +1392,8 @@ _PASSIVE_RE = re.compile(
 )
 _ACRONYM_RE = re.compile(r"\b[A-Z]{2,}s?\b")
 # The audience is architects and senior engineers, so these need no expansion.
+# Part numbers read as acronyms otherwise: "Part II", "Part IV".
+_ROMAN_RE = re.compile(r"(?:I{1,3}|IV|VI{0,3}|IX|XI{0,3})")
 _ASSUMED_ACRONYMS = frozenset({"API", "LLM", "US", "UK", "AI", "IT", "OK", "CTO", "UI"})
 
 _TIC_PHRASES = (
@@ -1404,7 +1406,7 @@ _TIC_PHRASES = (
 _ORDINAL_ADVERBS = ("firstly", "secondly", "thirdly", "fourthly", "fifthly")
 _UK_FORMS = (
     "artefact", "organisation", "judgement", "behaviour", "generalisation",
-    "optimise", "customise", "analyse", "realise", "recognise", "destabilise",
+    "optimise", "customise", "analysed", "analysing", "realise", "recognise", "destabilise",
     "towards", "licence", "amongst", "whilst",
     # UK doubles a final L before a suffix; US only doubles when the stress falls
     # on the final syllable. So modelling/labelling are UK, but "controlled" and
@@ -1522,8 +1524,9 @@ def _prose_text_checks(
     ))
 
     acronyms = sorted({
-        a for a in _ACRONYM_RE.findall(text)
+        a for a in _ACRONYM_RE.findall(prose if prose is not None else text)
         if a.rstrip("s").upper() not in _ASSUMED_ACRONYMS
+        and not _ROMAN_RE.fullmatch(a)
     })
     checks.append(_check(
         "acronyms_to_verify", "ok" if not acronyms else "review",
@@ -1535,15 +1538,26 @@ def _prose_text_checks(
     # source: "CANCELLED" in a Java enum and "Threat Modelling" in a cited article title
     # were both being reported as corrections to make.
     lowered = (prose if prose is not None else text).lower()
+
+    def count(needle: str) -> int:
+        """Count a needle on word boundaries, so 'able to' misses 'unable to'."""
+        pattern = re.escape(needle.strip())
+        if needle.strip()[:1].isalnum():
+            pattern = r"\b" + pattern
+        if needle.strip()[-1:].isalnum():
+            pattern = pattern + r"\b"
+        return len(re.findall(pattern, lowered))
+
     for name, needles in (
         ("tic_phrases", _TIC_PHRASES),
         ("uk_spellings", _UK_FORMS),
         ("ordinal_adverbs", _ORDINAL_ADVERBS),
     ):
-        found = [f"{n.strip()}x{lowered.count(n)}" for n in needles if lowered.count(n)]
+        found = [f"{n.strip()}x{count(n)}" for n in needles if count(n)]
         checks.append(_check(name, "ok" if not found else "review", len(found), "0", found))
 
-    doubles = len(re.findall(r"[^\n] {2,}", text))
+    # Code indentation and the " | " of a rendered table are not double spaces in prose.
+    doubles = len(re.findall(r"[^\n] {2,}", prose if prose is not None else text))
     checks.append(_check(
         "double_spaces", "ok" if not doubles else "review", doubles,
         "0 outside code paragraphs",
