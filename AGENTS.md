@@ -178,6 +178,24 @@ the agent writing it is the least likely to notice. So:
 
 ## Acting on Review Feedback
 
+**Editing a passage orphans the comments anchored to it, and nothing tells you.** Google drops
+a comment from the document's display once its anchored range has been rewritten, but the Drive
+API keeps returning it as unresolved *with its original `anchor` and quoted text*. There is no
+field that distinguishes the two — checking whether the quoted words still appear in the text
+does not work either, because an edit **inside** the anchored range breaks the anchor while
+leaving the words. Measured on Chapter 8 (2026-09-02): `pv comments` reported 15 unresolved; the
+author could see exactly 1.
+
+Consequences:
+- `pv comments` **overcounts** after any editing pass. Treat its number as an upper bound, and
+  ask the author what they can actually see before concluding work remains.
+- Read and classify the whole comment set **before** rewriting the anchors, not chapter-by-chapter
+  as you edit — once a passage is rewritten its comment is invisible to the author and only
+  recoverable through the API.
+- Resolve as you go. A comment you have addressed should be resolved in the same pass, or it
+  becomes an invisible open item that neither of you can see in the document.
+
+
 When working through review notes (PV bullets or sidebar comments), classify each into one of three tiers and act accordingly:
 
 - **Mechanical fix** (typo, US-vs-UK spelling, missing comma, hyphenation, term-rename, unambiguous text substitution): batch with sibling mechanical fixes and apply via `pv edit`. Show the user a single report listing every fix that landed (or skipped, with reason). Don't ask per-fix permission.

@@ -3556,7 +3556,11 @@ def build_epub(
     media_files = []  # (epub href, bytes) to write into the zip
     skipped_images = 0
     for index, doc_id in enumerate(doc_ids, start=1):
-        doc = docs_service.documents().get(documentId=doc_id).execute()
+        # Retry this one: the loop fetches a document, then spends minutes downloading its
+        # images, by which time the server has usually dropped the keep-alive connection.
+        # The next fetch then blocks on a dead socket until it times out, which killed two
+        # 13-chapter builds on 2026-09-02 — each doc fetches in under three seconds alone.
+        doc = docs_service.documents().get(documentId=doc_id).execute(num_retries=3)
         chapter_title = doc.get("title", f"Chapter {index}")
         blocks = _extract_blocks(doc)
 
