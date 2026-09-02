@@ -637,7 +637,19 @@ def _insert_after_plan(
     # Insert just before the paragraph's terminating newline so the new
     # paragraph(s) inherit the anchor paragraph's style.
     insert_index = el["endIndex"] - 1
-    request = {"insertText": {"location": {"index": insert_index}, "text": "\n" + text}}
+    # Match how the document already separates paragraphs. A doc that puts an empty
+    # paragraph between paragraphs needs one here too, or the insertion reads as
+    # jammed against its anchor while everything around it breathes.
+    following = content[body_index + 1] if body_index + 1 < len(content) else None
+    blank_line_style = bool(
+        following is not None
+        and following.get("paragraph")
+        and not _paragraph_text(following).strip()
+    )
+    separator = "\n\n" if blank_line_style else "\n"
+    request = {
+        "insertText": {"location": {"index": insert_index}, "text": separator + text}
+    }
     return {"kind": "ok", "request": request, "body_index": body_index}
 
 
@@ -1366,6 +1378,7 @@ _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 _LONG_SENTENCE_WORDS = 35
 _SENTENCE_MEAN_TARGET = (20.0, 24.0)
 _EM_DASH_WORDS_PER = 150
+_EM_DASH_WORDS_MAX = 200
 # Long sentences and nested asides are tolerated at a rate, not banned. Both
 # thresholds are Sarah Grey's demonstrated bar, measured on Chapter 7 — the one
 # chapter she has reviewed and signed off — which carries 46 sentences over 35
@@ -1453,7 +1466,9 @@ def _flagged_phrases(text: str, phrases: list[str]) -> list[str]:
     return found
 
 
-def _prose_text_checks(text: str, phrases: list[str] | None = None) -> list[dict]:
+def _prose_text_checks(
+    text: str, phrases: list[str] | None = None, prose: str | None = None,
+) -> list[dict]:
     """Character-level checks: length, density, and greppable house style."""
     sentences = _sentences(text)
     words = text.split()
@@ -1480,9 +1495,14 @@ def _prose_text_checks(text: str, phrases: list[str] | None = None) -> list[dict
     em_dashes = text.count("—")
     per = word_count // em_dashes if em_dashes else 0
     checks.append(_check(
-        "em_dash_density", "ok" if em_dashes == 0 or per >= _EM_DASH_WORDS_PER else "review",
+        # A band has two sides. Stripping em-dashes to clear a "too dense" flag can
+        # overshoot: Chapter 8 went from 1 per 141 words to 1 per 257 in two days of
+        # editing and the check stayed green the whole way, because it only ever looked
+        # at the crowded end.
+        "em_dash_density",
+        "ok" if em_dashes and _EM_DASH_WORDS_PER <= per <= _EM_DASH_WORDS_MAX else "review",
         f"{em_dashes} total, 1 per {per} words" if em_dashes else "0",
-        f"1 per {_EM_DASH_WORDS_PER}-200 words",
+        f"1 per {_EM_DASH_WORDS_PER}-{_EM_DASH_WORDS_MAX} words",
     ))
 
     nested = [s for s in sentences if s.count("—") >= 2]
@@ -1510,7 +1530,11 @@ def _prose_text_checks(text: str, phrases: list[str] | None = None) -> list[dict
         len(acronyms), "each spelled out on first use", acronyms,
     ))
 
-    lowered = text.lower()
+    # Spelling and phrase checks read running prose only. A UK spelling inside a code
+    # snippet belongs to the snippet, and one inside a linked source title belongs to the
+    # source: "CANCELLED" in a Java enum and "Threat Modelling" in a cited article title
+    # were both being reported as corrections to make.
+    lowered = (prose if prose is not None else text).lower()
     for name, needles in (
         ("tic_phrases", _TIC_PHRASES),
         ("uk_spellings", _UK_FORMS),
@@ -1625,9 +1649,42 @@ def _body_paragraphs(doc: dict) -> list[str]:
         text = _render_para_elements(paragraph.get("elements", [])).strip()
         if text == _REVIEW_HEADING:
             break
+        if _CAPTION_RE.match(text):
+            continue
         if len(text.split()) >= 5:
             paras.append(text)
     return paras
+
+
+_CAPTION_RE = re.compile(r"^(?:Figure|Table|Example)\s+\d+[-–]\d+\.")
+
+
+def _prose_text(doc: dict) -> str:
+    """The document's running prose: no headings, no captions, no code paragraphs.
+
+    Spelling, phrase and register checks are about what the author wrote in prose. A UK
+    spelling inside a Java snippet is the snippet's, and one inside a linked source title
+    is the source's — neither is a correction to make. Captions are excluded too: they
+    are their own form with their own rules, and counting them as paragraphs distorts
+    paragraph length.
+    """
+    parts = []
+    for element in doc.get("body", {}).get("content", []):
+        paragraph = element.get("paragraph")
+        if not paragraph or _is_code_paragraph(element):
+            continue
+        style = (paragraph.get("paragraphStyle") or {}).get(
+            "namedStyleType", "NORMAL_TEXT"
+        )
+        if style != "NORMAL_TEXT":
+            continue
+        rendered = _render_para_elements(paragraph.get("elements", []))
+        if _text_from_elements(paragraph.get("elements", [])) == _REVIEW_HEADING:
+            break
+        if _CAPTION_RE.match(rendered.strip()):
+            continue
+        parts.append(rendered)
+    return "".join(parts)
 
 
 def _prose_only(doc: dict, text: str) -> str:
@@ -1828,7 +1885,7 @@ def _prose_check_from_doc(
 ) -> dict:
     """Run the mechanical half of the pre-submission sweep over a document."""
     text = _extract_text(doc)
-    checks = (_prose_text_checks(text, phrases)
+    checks = (_prose_text_checks(text, phrases, prose=_prose_text(doc))
               + _prose_structure_checks(doc, text, terms, chapter))
     return {
         "title": doc.get("title", ""),

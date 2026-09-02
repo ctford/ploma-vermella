@@ -65,6 +65,7 @@ from pv import (
     _preceding_image_id,
     _prose_check_from_doc,
     _prose_structure_checks,
+    _prose_text,
     _prose_text_checks,
     _replace_body_range_plan,
     _replace_image_plan,
@@ -1667,9 +1668,40 @@ def test_prose_text_checks_em_dash_density_and_nested_asides():
     assert _named(checks, "em_dash_density")["status"] == "review"
 
 
-def test_prose_text_checks_em_dash_density_ok_when_sparse():
-    text = " ".join(["word"] * 400) + " — one aside."
-    assert _named(_prose_text_checks(text), "em_dash_density")["status"] == "ok"
+def test_insert_after_matches_the_document_paragraph_spacing():
+    """A doc that separates paragraphs with a blank line gets one before the insert too."""
+    spaced = _fake_doc(_para(1, "Anchor here.\n"), _para(15, "\n"), _para(16, "Next.\n"))
+    plan = _insert_after_plan(spaced, "Anchor here.", "New text.")
+    assert plan["request"]["insertText"]["text"] == "\n\nNew text."
+    tight = _fake_doc(_para(1, "Anchor here.\n"), _para(15, "Next.\n"))
+    plan = _insert_after_plan(tight, "Anchor here.", "New text.")
+    assert plan["request"]["insertText"]["text"] == "\nNew text."
+
+
+def test_prose_text_checks_em_dash_density_is_a_two_sided_band():
+    """Too few is a finding too: stripping em-dashes to clear a flag can overshoot."""
+    sparse = " ".join(["word"] * 400) + " — one aside."
+    assert _named(_prose_text_checks(sparse), "em_dash_density")["status"] == "review"
+    in_band = " ".join(["word"] * 170) + " — one aside."
+    assert _named(_prose_text_checks(in_band), "em_dash_density")["status"] == "ok"
+
+
+def test_spelling_checks_skip_code_paragraphs_and_captions():
+    """A UK spelling inside a code snippet is the snippet's, not a correction to make."""
+    def para(text, mono=False):
+        style = {"weightedFontFamily": {"fontFamily": "Courier New"}} if mono else {}
+        return {"paragraph": {"paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                              "elements": [{"textRun": {"content": text, "textStyle": style}}]}}
+    doc = {"body": {"content": [
+        para("The order was CANCELLED and the colour analysed.\n", mono=True),
+        para("Figure 8-1. A caption mentioning an artefact in passing.\n"),
+        para("The team shipped the feature on time.\n"),
+    ]}}
+    prose = _prose_text(doc)
+    assert "CANCELLED" not in prose and "artefact" not in prose
+    assert "shipped the feature" in prose
+    checks = _prose_text_checks(_extract_text(doc), prose=prose)
+    assert _named(checks, "uk_spellings")["value"] == 0
 
 
 def test_prose_text_checks_finds_passives_tics_and_uk_forms():
