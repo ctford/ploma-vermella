@@ -1608,9 +1608,17 @@ def _flagged_phrases(text: str, phrases: list[str]) -> list[str]:
 def _prose_text_checks(
     text: str, phrases: list[str] | None = None, prose: str | None = None,
 ) -> list[dict]:
-    """Character-level checks: length, density, and greppable house style."""
-    sentences = _sentences(text)
-    words = text.split()
+    """Character-level checks: length, density, and greppable house style.
+
+    Every measure here is about running prose, so they all read `prose` when it is
+    given. A rendered table is a row of cells joined by " | " with no sentence-ending
+    punctuation, so counting it as prose collapses a whole table into one enormous
+    sentence: the Conclusion measured a mean of 28.1 words against a real 17.7 until
+    this was fixed. Code paragraphs distort the same measures for the same reason.
+    """
+    measured = prose if prose is not None else text
+    sentences = _sentences(measured)
+    words = measured.split()
     word_count = len(words)
     checks = []
 
@@ -1631,7 +1639,7 @@ def _prose_text_checks(
         [s[:120] for s in long_sentences[:5]],
     ))
 
-    em_dashes = text.count("—")
+    em_dashes = measured.count("—")
     per = word_count // em_dashes if em_dashes else 0
     checks.append(_check(
         # A band has two sides. Stripping em-dashes to clear a "too dense" flag can
@@ -1654,7 +1662,7 @@ def _prose_text_checks(
         [s[:120] for s in nested[:5]],
     ))
 
-    passives = _PASSIVE_RE.findall(text)
+    passives = _PASSIVE_RE.findall(measured)
     checks.append(_check(
         "passive_constructions", "ok" if not passives else "review",
         len(passives), "trend down; the regex over-matches, so eyeball each",

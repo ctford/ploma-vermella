@@ -1689,6 +1689,18 @@ def test_prose_text_checks_em_dash_density_is_a_two_sided_band():
     assert _named(_prose_text_checks(in_band), "em_dash_density")["status"] == "ok"
 
 
+def test_prose_metrics_ignore_a_rendered_table():
+    """A table renders as 'a | b' with no full stop, so counting it wrecks the mean."""
+    prose = "Short sentence here. Another short one follows it now.\n"
+    rows = "\n".join(f"Ch {i} | {i}000 | 20.{i}" for i in range(1, 13))
+    table = "Chapter | Words | Mean\n" + rows
+    full = prose + table
+    inflated = _named(_prose_text_checks(full), "sentence_length_mean")["value"]
+    honest = _named(_prose_text_checks(full, prose=prose), "sentence_length_mean")["value"]
+    assert inflated > 20, "the table should wreck the mean when counted as prose"
+    assert honest < 8, "prose-only should see two short sentences"
+
+
 def test_insert_table_plan_places_and_validates():
     doc = _fake_doc(_para(1, "Anchor paragraph.\n"), _para(20, "After.\n"))
     plan = _insert_table_plan(doc, "Anchor", [["a", "b"], ["c", "d"]])
