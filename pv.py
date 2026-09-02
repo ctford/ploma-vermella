@@ -1590,6 +1590,16 @@ _SPELLED_NUMBERS = (
     "sixty", "seventy", "eighty", "ninety", "hundred", "thousand",
 )
 _FIGURE_CAPTION_RE = re.compile(r"^(Figure\s+(\d+-\d+))\.")
+# A passage that introduces several figures at once names only the endpoints —
+# "see Figures 11-5 through 11-7" — so a plain substring search reports the whole
+# run as unreferenced. Ranges are ordinary, and a check that flags them trains a
+# reader to ignore it. Matching on the number rather than the whole label also
+# stops "Figure 1-1" counting as a reference to "Figure 1-10".
+_FIGURE_REF_RE = re.compile(r"\bFigures?\s+(\d+)-(\d+)")
+_FIGURE_RANGE_RE = re.compile(
+    r"\bFigures\s+(\d+)-(\d+)\s*(?:through|to|and|[\u2013\u2014])\s*(?:\1-)?(\d+)\b",
+    re.I,
+)
 # Italics carry two jobs: marking a term of art, and stressing a word. Only the
 # first is once-per-book, so the repeat check has to ignore stressed function
 # words — an author may legitimately italicize "and" twice for emphasis.
@@ -1694,6 +1704,15 @@ def _harness_role_case(text: str) -> list[str]:
     if run:
         flush(run)
     return hits
+
+
+def _referenced_figures(text: str) -> set[str]:
+    """Figure numbers the text refers to, with ranges expanded to their members."""
+    refs = {f"{chap}-{num}" for chap, num in _FIGURE_REF_RE.findall(text)}
+    for chap, start, end in _FIGURE_RANGE_RE.findall(text):
+        if int(end) >= int(start):
+            refs.update(f"{chap}-{n}" for n in range(int(start), int(end) + 1))
+    return refs
 
 
 def _prose_text_checks(
@@ -2164,11 +2183,10 @@ def _prose_structure_checks(
         match = _FIGURE_CAPTION_RE.match(body_text)
         if not match:
             continue
-        label = match.group(1)
         caption_at = text.find(body_text[:40])
         before = text[:caption_at] if caption_at > 0 else ""
-        if label not in before:
-            unreferenced.append(label)
+        if match.group(2) not in _referenced_figures(before):
+            unreferenced.append(match.group(1))
     checks.append(_check(
         "figures_not_referenced_before_caption", "ok" if not unreferenced else "review",
         len(unreferenced), "0 — reference the figure in the body before it appears",

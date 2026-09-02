@@ -69,6 +69,7 @@ from pv import (
     _prose_structure_checks,
     _prose_text,
     _prose_text_checks,
+    _referenced_figures,
     _replace_body_range_plan,
     _replace_image_plan,
     _replace_section_plan,
@@ -1641,6 +1642,22 @@ def _check_para(elements, style="NORMAL_TEXT"):
     return {"paragraph": {
         "elements": elements, "paragraphStyle": {"namedStyleType": style},
     }}
+
+
+def test_referenced_figures_expands_a_range():
+    """"Figures 11-5 through 11-7" names three figures but only two numbers."""
+    refs = _referenced_figures("See Figures 11-5 through 11-7 for the breakdown.")
+    assert refs == {"11-5", "11-6", "11-7"}
+
+
+def test_referenced_figures_handles_and_and_dashes():
+    assert _referenced_figures("Figures 3-1 and 3-2") == {"3-1", "3-2"}
+    assert _referenced_figures("Figures 3-1\u20133-3") == {"3-1", "3-2", "3-3"}
+
+
+def test_referenced_figures_does_not_confuse_a_prefix():
+    """"Figure 1-1" must not count as a reference to "Figure 1-10"."""
+    assert "1-10" not in _referenced_figures("As shown in Figure 1-1, the loop closes.")
 
 
 def test_harness_roles_flag_a_lowercase_enumeration():
