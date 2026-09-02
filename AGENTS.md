@@ -23,7 +23,10 @@ CLI tool that reviews Google Doc book chapters and posts feedback as comments.
 - `tests/test_pv.py` — unit tests (run with `.venv/bin/pytest`, lint with `.venv/bin/ruff`)
 - `install-hooks.sh` — installs pre-commit hook that runs tests before each commit
 - `context/` — gitignored; one subdir per **work** (a book or other long-running effort under review)
-  - Each work subdir is its own independent git repo, versioned locally (no shared remote).
+  - Each work subdir is its own independent git repo, with its own **private** remote (added
+    2026-09-02; before that they existed on one machine only). Commit here regularly and push —
+    a work's context repo holds the style guide, editor-feedback patterns, terms and phrase
+    lists, and figure conventions, none of which can be recovered from the manuscript itself.
   - `context/<work-slug>/README.md` — **index of that work's context. Read this first;** it
     describes the work and points to everything else worth loading (progressive loading).
   - `context/<work-slug>/style_guide.md` — prose rules for that work. Each work is
