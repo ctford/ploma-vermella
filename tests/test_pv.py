@@ -44,6 +44,7 @@ from pv import (
     _inline_object_ids,
     _insert_after_plan,
     _insert_before_plan,
+    _insert_table_plan,
     _is_code_paragraph,
     _is_image_paragraph,
     _is_table_separator,
@@ -77,6 +78,7 @@ from pv import (
     _slugify,
     _style_plan,
     _suggestions_from_doc,
+    _table_cell_starts,
     _terms_italics_scope,
     _text_from_elements,
     _title_page_xhtml,
@@ -1685,6 +1687,33 @@ def test_prose_text_checks_em_dash_density_is_a_two_sided_band():
     assert _named(_prose_text_checks(sparse), "em_dash_density")["status"] == "review"
     in_band = " ".join(["word"] * 170) + " — one aside."
     assert _named(_prose_text_checks(in_band), "em_dash_density")["status"] == "ok"
+
+
+def test_insert_table_plan_places_and_validates():
+    doc = _fake_doc(_para(1, "Anchor paragraph.\n"), _para(20, "After.\n"))
+    plan = _insert_table_plan(doc, "Anchor", [["a", "b"], ["c", "d"]])
+    assert plan["kind"] == "ok"
+    assert plan["rows"] == 2 and plan["columns"] == 2
+    assert plan["index"] == 19, "defaults to just after the anchor paragraph"
+    before = _insert_table_plan(doc, "Anchor", [["a", "b"]], before=True)
+    assert before["index"] == 1
+
+
+def test_insert_table_plan_rejects_ragged_rows():
+    doc = _fake_doc(_para(1, "Anchor.\n"))
+    with pytest.raises(ValueError, match="same number of cells"):
+        _insert_table_plan(doc, "Anchor", [["a", "b"], ["c"]])
+    with pytest.raises(ValueError, match="at least one row"):
+        _insert_table_plan(doc, "Anchor", [])
+
+
+def test_table_cell_starts_reads_in_reading_order():
+    """Cells must come back in reading order so the fill can run in reverse."""
+    def cell(i):
+        return {"content": [{"startIndex": i, "paragraph": {"elements": []}}]}
+    table = {"tableRows": [{"tableCells": [cell(5), cell(9)]},
+                           {"tableCells": [cell(13), cell(17)]}]}
+    assert _table_cell_starts(table) == [5, 9, 13, 17]
 
 
 def test_resolve_all_uses_the_paginating_fetcher(monkeypatch):

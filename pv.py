@@ -653,6 +653,143 @@ def _insert_after_plan(
     return {"kind": "ok", "request": request, "body_index": body_index}
 
 
+def _insert_table_plan(
+    doc: dict, anchor: str, rows: list[list[str]], before: bool = False,
+    require_unique: bool = True, occurrence: int | None = None,
+) -> dict:
+    """Plan where a table goes and check its shape.
+
+    Returns {"kind": "ok", "index", "rows", "columns", "body_index"} or an ambiguous
+    result. The table itself is created in two passes by `insert_table` — the API
+    numbers the cells only once the table exists.
+    """
+    if not rows or not rows[0]:
+        raise ValueError("a table needs at least one row with one cell")
+    widths = {len(row) for row in rows}
+    if len(widths) != 1:
+        raise ValueError(
+            f"every row must have the same number of cells; saw {sorted(widths)}"
+        )
+    if not anchor:
+        raise ValueError("anchor must not be empty")
+
+    content = doc.get("body", {}).get("content", [])
+    nanchor = _normalize_quotes(anchor)
+    hits = [
+        (i, el) for i, el in enumerate(content)
+        if el.get("paragraph") and nanchor in _normalize_quotes(_paragraph_text(el))
+    ]
+    if not hits:
+        return {"kind": "ambiguous", "result": _ambiguous(
+            "no_match",
+            f"anchor not found: {anchor!r}; the text may have changed since the doc was read.",
+            options=_fuzzy_for_doc(doc, anchor),
+            resolution={"how": "re_call_with", "field": "anchor"},
+        )}
+    options = [
+        {"id": n, "body_index": i, "context": _paragraph_text(el).strip()[:120]}
+        for n, (i, el) in enumerate(hits, 1)
+    ]
+    if occurrence is not None:
+        if not 1 <= occurrence <= len(hits):
+            return {"kind": "ambiguous", "result": _ambiguous(
+                "occurrence_out_of_range",
+                f"occurrence {occurrence} is out of range; there are {len(hits)} matches.",
+                options=options,
+                resolution={"how": "re_call_with", "field": "occurrence"},
+            )}
+        body_index, el = hits[occurrence - 1]
+    elif len(hits) > 1 and require_unique:
+        return {"kind": "ambiguous", "result": _ambiguous(
+            "multiple_matches",
+            f"anchor matches {len(hits)} paragraphs; PV will not choose which.",
+            question="Which paragraph did you mean to put the table by?",
+            options=options,
+            resolution={
+                "how": "re_call_with", "field": "occurrence",
+                "example": "pv table <doc> <anchor> <rows> --occurrence 2",
+            },
+        )}
+    else:
+        body_index, el = hits[0]
+
+    index = el["startIndex"] if before else el["endIndex"]
+    return {
+        "kind": "ok", "index": index, "body_index": body_index,
+        "rows": len(rows), "columns": len(rows[0]),
+    }
+
+
+def _table_cell_starts(table: dict) -> list[int]:
+    """The insertion index of each cell's first paragraph, in reading order."""
+    starts = []
+    for row in table.get("tableRows", []):
+        for cell in row.get("tableCells", []):
+            content = cell.get("content", [])
+            if content:
+                starts.append(content[0]["startIndex"])
+    return starts
+
+
+def insert_table(
+    doc_id_or_url: str, anchor: str, rows: list[list[str]], before: bool = False,
+    header: bool = False, allow_multiple: bool = False, occurrence: int | None = None,
+) -> dict:
+    """Insert a table of `rows` next to the paragraph containing `anchor`.
+
+    Two passes, because the Docs API assigns cell indices only once the table exists:
+    create the empty table, re-read the document, then fill the cells **from the last
+    to the first** so that each insertion cannot shift the indices of the cells still
+    to be filled. `header` bolds the first row.
+    """
+    doc_id = _extract_doc_id(doc_id_or_url)
+    service = _docs_service()
+    doc = service.documents().get(documentId=doc_id).execute()
+    plan = _insert_table_plan(
+        doc, anchor, rows, before=before,
+        require_unique=not allow_multiple, occurrence=occurrence,
+    )
+    if plan["kind"] == "ambiguous":
+        return plan["result"]
+
+    service.documents().batchUpdate(documentId=doc_id, body={"requests": [
+        {"insertTable": {
+            "rows": plan["rows"], "columns": plan["columns"],
+            "location": {"index": plan["index"]},
+        }}
+    ]}).execute()
+
+    doc = service.documents().get(documentId=doc_id).execute()
+    table_el = None
+    for element in doc.get("body", {}).get("content", []):
+        if element.get("table") and element["startIndex"] >= plan["index"]:
+            table_el = element
+            break
+    if table_el is None:
+        raise RuntimeError("the table was created but could not be found again")
+
+    starts = _table_cell_starts(table_el["table"])
+    flat = [cell for row in rows for cell in row]
+    requests = []
+    for start, text in reversed(list(zip(starts, flat))):
+        if not text:
+            continue
+        requests.append({"insertText": {"location": {"index": start}, "text": text}})
+        if header and starts.index(start) < plan["columns"]:
+            requests.append({"updateTextStyle": {
+                "range": {"startIndex": start, "endIndex": start + _utf16_len(text)},
+                "textStyle": {"bold": True}, "fields": "bold",
+            }})
+    if requests:
+        service.documents().batchUpdate(
+            documentId=doc_id, body={"requests": requests},
+        ).execute()
+    return {
+        "status": "inserted", "rows": plan["rows"], "columns": plan["columns"],
+        "body_index": plan["body_index"], "anchor": anchor,
+    }
+
+
 def _insert_before_plan(
     doc: dict,
     anchor: str,
@@ -4661,6 +4798,25 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Target the Nth matching paragraph (1-based).",
     )
 
+    p_table = sub.add_parser(
+        "table", help="Insert a table of rows next to an anchor paragraph."
+    )
+    p_table.add_argument("doc", metavar="DOC_URL")
+    p_table.add_argument("anchor", metavar="ANCHOR", help="Substring of the anchor paragraph.")
+    p_table.add_argument(
+        "rows", metavar="ROWS_JSON",
+        help='JSON list of rows, e.g. \'[["Chapter","Words"],["1","6,599"]]\'',
+    )
+    p_table.add_argument(
+        "--before", action="store_true", help="Place the table before the anchor, not after."
+    )
+    p_table.add_argument("--header", action="store_true", help="Bold the first row.")
+    p_table.add_argument(
+        "--allow-multiple", action="store_true",
+        help="Use the first match even if the anchor is not unique.",
+    )
+    p_table.add_argument("--occurrence", type=int, default=None)
+
     p_bullets = sub.add_parser(
         "bullets",
         help="Turn a contiguous range of paragraphs into a bulleted or numbered list.",
@@ -4844,6 +5000,12 @@ def main() -> None:
     elif args.command == "heading":
         result = set_heading(
             args.doc, args.anchor, args.level,
+            allow_multiple=args.allow_multiple, occurrence=args.occurrence,
+        )
+    elif args.command == "table":
+        result = insert_table(
+            args.doc, args.anchor, json.loads(args.rows),
+            before=args.before, header=args.header,
             allow_multiple=args.allow_multiple, occurrence=args.occurrence,
         )
     elif args.command == "bullets":

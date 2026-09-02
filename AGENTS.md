@@ -95,6 +95,8 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
 .venv/bin/pv style <doc-url> <text> [--italic|--bold|--underline|--no-italic|--no-bold|--no-underline|--color HEX] [--all]  # character styling (turn styles on, or off with --no-*)
 .venv/bin/pv heading <doc-url> <anchor> <level>        # set a paragraph's style (1-6, normal, title) by anchor
 .venv/bin/pv bullets <doc-url> <start> [end] [--ordered] [--remove]  # make a paragraph range a bulleted/numbered list (or strip bullets)
+.venv/bin/pv table <doc-url> <anchor> <rows-json> [--before] [--header]  # insert a table next to an anchor paragraph;
+                                                       # rows-json is a list of equal-length rows, --header bolds the first
 .venv/bin/pv comment <doc-url> <quoted-text> <text>    # anchored sidebar comment
 .venv/bin/pv comments <doc-url> [--include-resolved]   # list comments: id, content, quoted text, resolved
 .venv/bin/pv resolve <doc-url> <comment-id>            # resolve a comment
