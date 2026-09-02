@@ -1517,6 +1517,7 @@ _SENTENCE_MEAN_TARGET = (20.0, 24.0)
 _EM_DASH_WORDS_PER = 150
 _EM_DASH_WORDS_MAX = 200
 _PARAGRAPH_MAX_WORDS = 120
+_SENTENCE_MAX_WORDS = 45
 # Long sentences and nested asides are tolerated at a rate, not banned. Both
 # thresholds are Sarah Grey's demonstrated bar, measured on Chapter 7 — the one
 # chapter she has reviewed and signed off — which carries 46 sentences over 35
@@ -1651,6 +1652,19 @@ def _prose_text_checks(
         "ok" if em_dashes and _EM_DASH_WORDS_PER <= per <= _EM_DASH_WORDS_MAX else "review",
         f"{em_dashes} total, 1 per {per} words" if em_dashes else "0",
         f"1 per {_EM_DASH_WORDS_PER}-{_EM_DASH_WORDS_MAX} words",
+    ))
+
+    # Two tiers, as the book itself recommends for code health: a hard ceiling that
+    # gates, and a softer measure that only reports. The style guide's "~35 words and
+    # the reader loses the thread" describes 11.6% of the book's sentences, which is a
+    # budget; 45 words is where a sentence has genuinely got away, and it flags 4.1% —
+    # the same rate as the 120-word paragraph rule it mirrors.
+    runaway = [s for s in sentences if len(s.split()) > _SENTENCE_MAX_WORDS]
+    checks.append(_check(
+        "sentences_over_45_words", "ok" if not runaway else "review", len(runaway),
+        f"0 — split anything past {_SENTENCE_MAX_WORDS} words",
+        [f"{len(s.split())}w: {s[:90]}" for s in sorted(
+            runaway, key=lambda x: -len(x.split()))[:5]],
     ))
 
     nested = [s for s in sentences if s.count("—") >= 2]

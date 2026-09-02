@@ -1689,6 +1689,16 @@ def test_prose_text_checks_em_dash_density_is_a_two_sided_band():
     assert _named(_prose_text_checks(in_band), "em_dash_density")["status"] == "ok"
 
 
+def test_sentence_ceiling_gates_separately_from_the_budget():
+    """45 words is the gate; the 35-word measure stays a budget, as with code health."""
+    short = "A short sentence. " * 12
+    runaway = " ".join(["word"] * 50) + "."
+    checks = _prose_text_checks(short + runaway)
+    gate = _named(checks, "sentences_over_45_words")
+    assert gate["value"] == 1 and gate["status"] == "review"
+    assert _named(_prose_text_checks(short), "sentences_over_45_words")["status"] == "ok"
+
+
 def test_prose_metrics_ignore_a_rendered_table():
     """A table renders as 'a | b' with no full stop, so counting it wrecks the mean."""
     prose = "Short sentence here. Another short one follows it now.\n"
