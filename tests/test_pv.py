@@ -2136,9 +2136,26 @@ def test_spelling_checks_skip_code_paragraphs_and_captions():
 def test_prose_text_checks_finds_passives_tics_and_uk_forms():
     text = "The report was written in order to explain the artefact."
     checks = _prose_text_checks(text)
-    assert _named(checks, "passive_constructions")["value"] == 1
+    assert _named(checks, "passive_constructions")["value"].startswith("1 (")
     assert "in order tox1" in _named(checks, "tic_phrases")["detail"]
     assert "artefactx1" in _named(checks, "uk_spellings")["detail"]
+
+
+def test_passive_check_gates_on_the_share_of_sentences_not_the_count():
+    """Author's call 2026-09-03: pin the gate at 12.5% of sentences (goal 10%).
+
+    Chapter 7 is the chapter Sarah signed off and it measures 10.7%, so a gate
+    below that would fail the chapter the targets are calibrated on.
+    """
+    clean = " ".join(["The team ships it."] * 9 + ["The report was written."])
+    passive_check = _named(_prose_text_checks(clean), "passive_constructions")
+    assert passive_check["value"].startswith("1 (10.0% of sentences)")
+    assert passive_check["status"] == "ok"
+
+    crowded = " ".join(["The report was written."] * 2 + ["The team ships it."] * 6)
+    crowded_check = _named(_prose_text_checks(crowded), "passive_constructions")
+    assert crowded_check["value"].startswith("2 (25.0% of sentences)")
+    assert crowded_check["status"] == "review"
 
 
 def test_prose_text_checks_flags_ly_ordinals_and_spares_the_bare_form():

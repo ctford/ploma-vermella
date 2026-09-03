@@ -1721,6 +1721,13 @@ _RUNAWAY_TOLERANCE = 5.0
 # editor herself, which makes the check cry wolf.
 _LONG_SENTENCE_WORDS_PER = 180
 _NESTED_ASIDE_WORDS_PER = 1200
+# Passive rate, as a share of sentences carrying at least one regex hit. Measured
+# over the prose of all 14 manuscript docs 2026-09-03: book 10.6%, range 4.2%
+# (Ch 11) to 13.6% (Ch 5). Pinned at 12.5% because Chapter 7 — the one chapter
+# Sarah has reviewed and signed off — sits at 12.4%, so a tighter gate would fail
+# the chapter the targets are calibrated on. Author's intent is to ratchet this to
+# 10% once Ch 7 has been swept.
+_PASSIVE_SENTENCE_PCT = 12.5
 
 _PASSIVE_RE = re.compile(
     r"\b(?:is|are|was|were|be|been|being)\s+(?:\w+ly\s+)?\w+(?:ed|en)\b", re.I
@@ -1985,9 +1992,14 @@ def _prose_text_checks(
     ))
 
     passives = _PASSIVE_RE.findall(measured)
+    passive_sentences = [s for s in sentences if _PASSIVE_RE.search(s)]
+    passive_pct = 100 * len(passive_sentences) / len(sentences) if sentences else 0.0
     checks.append(_check(
-        "passive_constructions", "ok" if not passives else "review",
-        len(passives), "trend down; the regex over-matches, so eyeball each",
+        "passive_constructions",
+        "ok" if passive_pct <= _PASSIVE_SENTENCE_PCT else "review",
+        f"{len(passives)} ({passive_pct:.1f}% of sentences)",
+        f"under {_PASSIVE_SENTENCE_PCT}% of sentences; "
+        "the regex over-matches, so eyeball each",
     ))
 
     acronyms = sorted({
