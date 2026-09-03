@@ -1561,6 +1561,116 @@ def _render_table(table: dict) -> str:
     return "".join(line + "\n" for line in lines)
 
 
+def _cell_carried_style(cell: dict) -> tuple[dict, str]:
+    """The character style to re-apply to a rewritten cell, and its fields mask.
+
+    Rewriting a cell deletes the runs that carried its formatting, so a header row
+    would come back unbold. Only the toggles these tables actually use are carried;
+    anything richer should be set deliberately rather than guessed at.
+    """
+    for element in cell.get("content", []):
+        for pe in element.get("paragraph", {}).get("elements", []):
+            run = pe.get("textRun")
+            if not run or not run.get("content", "").strip():
+                continue
+            source = run.get("textStyle", {})
+            style = {k: bool(source.get(k)) for k in ("bold", "italic", "underline")
+                     if k in source}
+            return (style, ",".join(sorted(style))) if style else ({}, "")
+    return {}, ""
+
+
+def _table_update_plan(
+    doc: dict, anchor: str, rows: list[list[str]],
+    require_unique: bool = True, occurrence: int | None = None,
+) -> dict:
+    """Rewrite every cell of the table matching `anchor`, keeping its structure.
+
+    The shape must match what is already there. A live measurement table gets
+    regenerated repeatedly, and the failure worth preventing is a regenerated table
+    silently losing or gaining a row against a document that still reads as if it
+    had the old one.
+    """
+    if not anchor:
+        raise ValueError("anchor must not be empty")
+    if not rows or not rows[0]:
+        raise ValueError("a table needs at least one row with one cell")
+    content = doc.get("body", {}).get("content", [])
+    nanchor = _normalize_quotes(anchor)
+    hits = [
+        (i, el) for i, el in enumerate(content)
+        if el.get("table") and nanchor in _normalize_quotes(_render_table(el["table"]))
+    ]
+    if not hits:
+        return {"kind": "ambiguous", "result": _ambiguous(
+            "no_match",
+            f"no table matched {anchor!r}; anchor on text from one of its cells.",
+            resolution={"how": "re_call_with", "field": "anchor"},
+        )}
+    options = [
+        {"id": n, "body_index": i,
+         "context": _render_table(el["table"]).split("\n")[0][:120]}
+        for n, (i, el) in enumerate(hits, 1)
+    ]
+    if occurrence is not None:
+        if occurrence < 1 or occurrence > len(hits):
+            return {"kind": "ambiguous", "result": _ambiguous(
+                "occurrence_out_of_range",
+                f"occurrence {occurrence} is out of range; {len(hits)} tables matched.",
+                options=options,
+                resolution={"how": "re_call_with", "field": "occurrence"},
+            )}
+        body_index, element = hits[occurrence - 1]
+    elif len(hits) > 1 and require_unique:
+        return {"kind": "ambiguous", "result": _ambiguous(
+            "multiple_matches",
+            f"anchor matches {len(hits)} tables; PV will not choose which.",
+            question="Which table did you mean to update?",
+            options=options,
+            resolution={"how": "re_call_with", "field": "occurrence"},
+        )}
+    else:
+        body_index, element = hits[0]
+
+    table = element["table"]
+    shape = (table.get("rows"), table.get("columns"))
+    given = (len(rows), len(rows[0]))
+    if any(len(r) != given[1] for r in rows) or shape != given:
+        return {"kind": "ambiguous", "result": _ambiguous(
+            "shape_mismatch",
+            f"the table is {shape[0]}x{shape[1]} but {given[0]}x{given[1]} was given; "
+            "PV will not add or drop rows to make them fit.",
+            resolution={"how": "re_call_with", "field": "rows"},
+        )}
+
+    # Back to front, so each rewrite leaves the indices of the cells before it alone.
+    requests: list[dict] = []
+    for r in reversed(range(table["rows"])):
+        cells = table["tableRows"][r]["tableCells"]
+        for c in reversed(range(table["columns"])):
+            cell = cells[c]
+            start = cell["content"][0]["startIndex"]
+            # Every cell keeps its final newline; deleting it would merge cells.
+            end = cell["content"][-1]["endIndex"] - 1
+            text = rows[r][c]
+            if end > start:
+                requests.append({"deleteContentRange": {
+                    "range": {"startIndex": start, "endIndex": end}}})
+            if not text:
+                continue
+            requests.append({"insertText": {
+                "location": {"index": start}, "text": text}})
+            style, fields = _cell_carried_style(cell)
+            if fields:
+                requests.append({"updateTextStyle": {
+                    "range": {"startIndex": start, "endIndex": start + len(text)},
+                    "textStyle": style, "fields": fields}})
+    return {
+        "kind": "ok", "requests": requests, "body_index": body_index,
+        "rows": table["rows"], "columns": table["columns"],
+    }
+
+
 # ---------------------------------------------------------------------------
 # pv prose-check — mechanical style sweep
 #
@@ -2267,11 +2377,19 @@ def _prose_check_from_doc(
 ) -> dict:
     """Run the mechanical half of the pre-submission sweep over a document."""
     text = _extract_text(doc)
-    checks = (_prose_text_checks(text, phrases, prose=_prose_text(doc))
+    prose = _prose_text(doc)
+    checks = (_prose_text_checks(text, phrases, prose=prose)
               + _prose_structure_checks(doc, text, terms, chapter))
+    # The denominators behind the rates above. Surfaced because a whole-manuscript
+    # figure has to be re-weighted across chapters, not averaged from the per-chapter
+    # percentages — and because deriving a count back out of "6 (1.7%)" fails on the
+    # rows that report zero.
     return {
         "title": doc.get("title", ""),
         "word_count": len(text.split()),
+        "prose_word_count": len(prose.split()),
+        "sentence_count": len(_sentences(prose)),
+        "paragraph_count": len(_body_paragraphs(doc)),
         "flagged": sum(1 for c in checks if c["status"] == "review"),
         "checks": checks,
         "needs_a_reader": [
@@ -3713,6 +3831,46 @@ def prose_check(
     return _prose_check_from_doc(doc, terms, chapter, phrases)
 
 
+def parse_table_rows(text: str) -> list[list[str]]:
+    """Parse pipe-delimited rows, the same shape `pv fetch` renders a table in."""
+    rows = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        rows.append([cell.strip() for cell in line.split("|")])
+    return rows
+
+
+def table_update(
+    doc_id_or_url: str, anchor: str, rows: list[list[str]],
+    allow_multiple: bool = False, occurrence: int | None = None,
+) -> dict:
+    """Rewrite the cells of the table matching `anchor`, keeping its structure.
+
+    The replacement must have the same number of rows and columns as the table it
+    replaces; a mismatch comes back as an ambiguous result rather than reshaping the
+    table. Bold, italic and underline carried by each cell are re-applied, so a
+    header row survives being rewritten.
+    """
+    doc_id = _extract_doc_id(doc_id_or_url)
+    service = _docs_service()
+    doc = service.documents().get(documentId=doc_id).execute()
+    plan = _table_update_plan(
+        doc, anchor, rows, require_unique=not allow_multiple, occurrence=occurrence
+    )
+    if plan["kind"] == "ambiguous":
+        return plan["result"]
+    service.documents().batchUpdate(
+        documentId=doc_id, body={"requests": plan["requests"]}
+    ).execute()
+    return {
+        "status": "updated",
+        "body_index": plan["body_index"],
+        "rows": plan["rows"],
+        "columns": plan["columns"],
+    }
+
+
 def insert_after(
     doc_id_or_url: str, anchor: str, text: str, allow_multiple: bool = False,
     occurrence: int | None = None, code: bool = False,
@@ -5115,6 +5273,29 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_table.add_argument("--occurrence", type=int, default=None)
 
+    p_table_update = sub.add_parser(
+        "table-update",
+        help="Rewrite the cells of an existing table, keeping its shape.",
+    )
+    p_table_update.add_argument("doc", metavar="DOC_URL")
+    p_table_update.add_argument(
+        "anchor", metavar="ANCHOR",
+        help="Substring of the target table's own text, e.g. its header row.",
+    )
+    p_table_update.add_argument(
+        "rows", metavar="ROWS",
+        help="JSON list of rows, or pipe-delimited lines with --pipes.",
+    )
+    p_table_update.add_argument(
+        "--pipes", action="store_true",
+        help="Parse ROWS as pipe-delimited lines, as pv fetch renders a table.",
+    )
+    p_table_update.add_argument(
+        "--allow-multiple", action="store_true",
+        help="Use the first match even if the anchor is not unique.",
+    )
+    p_table_update.add_argument("--occurrence", type=int, default=None)
+
     p_bullets = sub.add_parser(
         "bullets",
         help="Turn a contiguous range of paragraphs into a bulleted or numbered list.",
@@ -5306,6 +5487,12 @@ def main() -> None:
         result = insert_table(
             args.doc, args.anchor, json.loads(args.rows),
             before=args.before, header=args.header,
+            allow_multiple=args.allow_multiple, occurrence=args.occurrence,
+        )
+    elif args.command == "table-update":
+        result = table_update(
+            args.doc, args.anchor,
+            parse_table_rows(args.rows) if args.pipes else json.loads(args.rows),
             allow_multiple=args.allow_multiple, occurrence=args.occurrence,
         )
     elif args.command == "bullets":

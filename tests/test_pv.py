@@ -82,6 +82,7 @@ from pv import (
     _style_plan,
     _suggestions_from_doc,
     _table_cell_starts,
+    _table_update_plan,
     _terms_italics_scope,
     _text_from_elements,
     _title_page_xhtml,
@@ -1683,6 +1684,109 @@ def _check_para(elements, style="NORMAL_TEXT"):
     return {"paragraph": {
         "elements": elements, "paragraphStyle": {"namedStyleType": style},
     }}
+
+
+def _cell(text, bold=False):
+    style = {"bold": True} if bold else {}
+    return {"content": [{
+        "startIndex": 0, "endIndex": 0,
+        "paragraph": {"elements": [{"textRun": {"content": text, "textStyle": style}}]},
+    }]}
+
+
+def _table_doc(grid, bold_header=True, start=100):
+    """A doc holding one table, with plausible cell indices."""
+    idx = start + 2
+    rows = []
+    for r, row in enumerate(grid):
+        cells = []
+        for text in row:
+            content = text + "\n"
+            cell = _cell(text, bold=bold_header and r == 0)
+            cell["content"][0]["startIndex"] = idx + 1
+            cell["content"][0]["endIndex"] = idx + 1 + len(content)
+            idx += 2 + len(content)
+            cells.append(cell)
+        rows.append({"tableCells": cells})
+    table = {"rows": len(grid), "columns": len(grid[0]), "tableRows": rows}
+    return {"body": {"content": [
+        {"startIndex": start, "endIndex": idx, "table": table},
+    ]}}
+
+
+def test_table_update_plan_rewrites_every_cell_back_to_front():
+    doc = _table_doc([["Section", "Words"], ["Preface", "3,093"]])
+    plan = _table_update_plan(
+        doc, "Section", [["Section", "Words"], ["Preface", "3,138"]]
+    )
+    assert plan["kind"] == "ok"
+    assert (plan["rows"], plan["columns"]) == (2, 2)
+    # Later cells are rewritten first, so earlier cells' indices stay valid.
+    inserts = [r["insertText"] for r in plan["requests"] if "insertText" in r]
+    starts = [i["location"]["index"] for i in inserts]
+    assert starts == sorted(starts, reverse=True)
+    assert [i["text"] for i in inserts] == ["3,138", "Preface", "Words", "Section"]
+
+
+def test_table_update_plan_reapplies_a_bold_header():
+    doc = _table_doc([["Section", "Words"], ["Preface", "3,093"]])
+    plan = _table_update_plan(
+        doc, "Section", [["Section", "Words"], ["Preface", "3,138"]]
+    )
+    styled = [r["updateTextStyle"] for r in plan["requests"] if "updateTextStyle" in r]
+    # Only the header row carried bold, so only its two cells get it back.
+    assert len(styled) == 2
+    assert all(s["textStyle"]["bold"] is True for s in styled)
+    assert all(s["fields"] == "bold" for s in styled)
+
+
+def test_table_update_plan_refuses_to_reshape_the_table():
+    doc = _table_doc([["Section", "Words"], ["Preface", "3,093"]])
+    plan = _table_update_plan(doc, "Section", [["Section", "Words"]])
+    assert plan["kind"] == "ambiguous"
+    assert plan["result"]["reason"] == "shape_mismatch"
+    assert "2x2" in plan["result"]["message"] and "1x2" in plan["result"]["message"]
+
+
+def test_table_update_plan_no_match_is_ambiguous():
+    doc = _table_doc([["Section", "Words"]])
+    plan = _table_update_plan(doc, "Nothing like this", [["a", "b"]])
+    assert plan["kind"] == "ambiguous"
+    assert plan["result"]["reason"] == "no_match"
+
+
+def test_prose_check_surfaces_the_rate_denominators():
+    """The Conclusion's metrics table needs re-weighting across chapters, so the
+    counts behind each percentage have to be readable, not inferred from the rate."""
+    doc = {"title": "t", "body": {"content": [
+        _check_para([_styled_run("Heading here\n")], style="HEADING_1"),
+        _check_para([_styled_run("One two three four five six. Seven eight nine.\n")]),
+        _check_para([_styled_run("Ten eleven twelve thirteen fourteen.\n")]),
+        _check_para([_styled_run("Short one.\n")]),
+    ]}}
+    result = _prose_check_from_doc(doc)
+    # The two denominators do not filter alike, which is the reason to report both:
+    # the heading is excluded from prose entirely, but "Short one." is a sentence
+    # while being too short to count as a running-prose paragraph.
+    assert result["sentence_count"] == 4
+    assert result["paragraph_count"] == 2
+    over = _named(result["checks"], "paragraphs_over_120_words")["value"]
+    assert over.startswith("0 (")
+
+
+def test_prose_check_word_counts_separate_prose_from_tables():
+    """`word_count` is the whole document; `prose_word_count` is what the sentence
+    mean is actually computed over, so an overall mean can be re-derived exactly."""
+    doc = {"title": "t", "body": {"content": [
+        _check_para([_styled_run("Alpha beta gamma delta epsilon zeta.\n")]),
+        {"table": {"tableRows": [{"tableCells": [
+            {"content": [_check_para([_styled_run("cell one\n")])]},
+            {"content": [_check_para([_styled_run("cell two\n")])]},
+        ]}]}},
+    ]}}
+    result = _prose_check_from_doc(doc)
+    assert result["prose_word_count"] == 6
+    assert result["word_count"] > result["prose_word_count"]
 
 
 def test_unapplied_statuses_cover_the_no_change_results():

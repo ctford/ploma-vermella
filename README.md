@@ -86,6 +86,7 @@ pv cite <doc-url> <title> <url>             # italicize + hyperlink a work title
 pv heading <doc-url> <anchor> <level>       # set a paragraph's style (1-6, normal, title)
 pv bullets <doc-url> <start> [end] [--remove]  # make a paragraph range a bulleted/numbered list (or strip bullets)
 pv table <doc-url> <anchor> <rows-json>     # insert a table next to an anchor (--header bolds row one)
+pv table-update <doc-url> <anchor> <rows-json>  # rewrite an existing table's cells, keeping its shape
 pv build-epub <doc-url> <doc-url> ...       # build an EPUB (figures preserved) into dist/ with a date suffix
 pv build-pdf <doc-url> <doc-url> ...        # build a paginated PDF (needs Calibre's ebook-convert) into dist/
 pv upload <local-path> <folder-url>         # upload a local file (e.g. a built EPUB/PDF) into a Drive folder

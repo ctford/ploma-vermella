@@ -89,6 +89,7 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
 .venv/bin/pv insert-after <doc-url> <anchor> <text>    # insert paragraph(s) after an anchor paragraph
 .venv/bin/pv insert-after <doc-url> <anchor> <text> --code   # ...as a code block, in the doc's monospace font
 .venv/bin/pv insert-before <doc-url> <anchor> <text>   # insert paragraph(s) before an anchor paragraph
+.venv/bin/pv table-update <doc-url> <anchor> <rows-json>  # rewrite an existing table's cells, same shape
 .venv/bin/pv link <doc-url> <text> <url> [--all] [--color HEX|--no-color]  # hyperlink a span of text
 .venv/bin/pv cite <doc-url> <title> <url> [--all] [--color HEX|--no-color] # italicize + hyperlink a work title
                                                        # links are set in the O'Reilly red (d3002d) by default,
