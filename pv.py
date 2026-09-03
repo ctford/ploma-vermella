@@ -1729,7 +1729,9 @@ _ACRONYM_RE = re.compile(r"\b[A-Z]{2,}s?\b")
 # The audience is architects and senior engineers, so these need no expansion.
 # Part numbers read as acronyms otherwise: "Part II", "Part IV".
 _ROMAN_RE = re.compile(r"(?:I{1,3}|IV|VI{0,3}|IX|XI{0,3})")
-_ASSUMED_ACRONYMS = frozenset({"API", "LLM", "US", "UK", "AI", "IT", "OK", "CTO", "UI"})
+_ASSUMED_ACRONYMS = frozenset(
+    {"API", "LLM", "US", "UK", "AI", "IT", "OK", "CTO", "UI", "CEO", "PDF"}
+)
 
 # The inclusive "we" is the style guide's single most-edited voice rule, and it is a
 # density rather than a ban: "we engineers" with an explicit referent is allowed, and a
