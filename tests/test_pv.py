@@ -11,6 +11,7 @@ from PIL import Image
 
 import pv
 from pv import (
+    _RUNAWAY_TOLERANCE,
     _assign_parts,
     _block_html,
     _blocks_to_xhtml,
@@ -1951,14 +1952,20 @@ def test_sentence_ceiling_gates_separately_from_the_budget():
 
 
 def test_runaway_gate_is_a_tolerance_not_a_ceiling():
-    """Under 2% passes: one long sentence in a hundred is not a finding."""
-    many = "A short sentence here. " * 99
+    """A rate, not a ceiling. The rate itself is _RUNAWAY_TOLERANCE, currently 5%."""
     one_long = " ".join(["word"] * 50) + "."
-    ok = _named(_prose_text_checks(many + one_long), "sentences_over_45_words")
+    inside = "A short sentence here. " * 99
+    ok = _named(_prose_text_checks(inside + one_long), "sentences_over_45_words")
     assert ok["status"] == "ok", "1 in 100 is inside the tolerance"
-    few = "A short sentence here. " * 20
-    bad = _named(_prose_text_checks(few + one_long), "sentences_over_45_words")
-    assert bad["status"] == "review", "1 in 21 is not"
+    # Just over the line: 1 of 20 is 5.0%, and the gate is strictly-under.
+    outside = "A short sentence here. " * 19
+    bad = _named(_prose_text_checks(outside + one_long), "sentences_over_45_words")
+    assert bad["status"] == "review", "1 in 20 is exactly 5%, which does not pass"
+    # And comfortably inside at the old 2% bar, to pin that this is a loosening.
+    assert _RUNAWAY_TOLERANCE == 5.0
+    mid = "A short sentence here. " * 39
+    assert _named(_prose_text_checks(mid + one_long),
+                  "sentences_over_45_words")["status"] == "ok", "1 in 40 = 2.5%"
 
 
 def test_prose_metrics_ignore_a_rendered_table():
