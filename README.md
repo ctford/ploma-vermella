@@ -78,6 +78,7 @@ pv replace-image <doc-url> <caption> <deck-url> <slide-id>  # re-export a figure
 pv place-figure <doc-url> <anchor> <deck-url> <slide-id> --caption ...  # insert a centered figure + caption
 pv find <doc-url> <text>                    # locate text: indices, paragraph style, is_code, context
 pv insert-after <doc-url> <anchor> <text>   # insert paragraph(s) after an anchor paragraph
+pv insert-after <doc-url> <anchor> <text> --code   # ...as a code block, in the doc's monospace font
 pv insert-before <doc-url> <anchor> <text>  # insert paragraph(s) before an anchor paragraph
 pv link <doc-url> <text> <url>              # hyperlink a span of text, in the house red
 pv cite <doc-url> <title> <url>             # italicize + hyperlink a work title (citation)

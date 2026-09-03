@@ -87,6 +87,7 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
                                                        # reports text AND style-only suggestions; total_suggestion_count is
                                                        # distinct IDs (matches the Docs UI), not insertions + deletions
 .venv/bin/pv insert-after <doc-url> <anchor> <text>    # insert paragraph(s) after an anchor paragraph
+.venv/bin/pv insert-after <doc-url> <anchor> <text> --code   # ...as a code block, in the doc's monospace font
 .venv/bin/pv insert-before <doc-url> <anchor> <text>   # insert paragraph(s) before an anchor paragraph
 .venv/bin/pv link <doc-url> <text> <url> [--all] [--color HEX|--no-color]  # hyperlink a span of text
 .venv/bin/pv cite <doc-url> <title> <url> [--all] [--color HEX|--no-color] # italicize + hyperlink a work title
@@ -122,6 +123,13 @@ straight quotes/apostrophes match interchangeably, so you don't have to reproduc
 out of `fetch` that spans a link never matches. Anchor before or after the linked span instead,
 and change a URL with `pv link` rather than by editing the markup. Measured 2026-09-02: 8 of 46
 scripted edits silently did nothing for exactly this reason.
+
+**Moved code arrives as prose.** `insert-after`/`insert-before` give the new paragraphs the
+*anchor's* style, and an anchor in body text is not monospace — so a code block moved between
+chapters renders in the body font, and `prose-check` counts its indentation as double spaces.
+Pass `--code`, which sets the insertion in whatever monospace family the document already uses.
+Check the block is still valid after a move, too: splitting code into paragraphs can leave stray
+leading indent on brace lines.
 
 **A command that changes nothing exits non-zero.** `edit` and friends still print their
 structured `{"status": "ambiguous", ...}` result — that shape is the point, and the `options`

@@ -432,6 +432,42 @@ def _is_code_paragraph(element: dict) -> bool:
     return bool(families) and all(f in _MONOSPACE_FONTS for f in families)
 
 
+def _document_code_font(doc: dict, default: str = "Roboto Mono") -> str:
+    """The monospace family this document already uses for code, else `default`.
+
+    Inserted code should match the code around it, so callers ask the document
+    rather than hard-coding a face. Ties break toward the most-used family.
+    """
+    counts: dict[str, int] = {}
+    for element in doc.get("body", {}).get("content", []):
+        paragraph = element.get("paragraph")
+        if not paragraph:
+            continue
+        for pe in paragraph.get("elements", []):
+            text_run = pe.get("textRun")
+            if not text_run:
+                continue
+            family = (
+                text_run.get("textStyle", {})
+                .get("weightedFontFamily", {})
+                .get("fontFamily")
+            )
+            if family in _MONOSPACE_FONTS:
+                counts[family] = counts.get(family, 0) + len(text_run.get("content", ""))
+    if not counts:
+        return default
+    return max(sorted(counts), key=counts.__getitem__)
+
+
+def _monospace_request(start: int, end: int, font: str) -> dict:
+    """An updateTextStyle request setting `font` over a half-open index range."""
+    return {"updateTextStyle": {
+        "range": {"startIndex": start, "endIndex": end},
+        "textStyle": {"weightedFontFamily": {"fontFamily": font, "weight": 400}},
+        "fields": "weightedFontFamily",
+    }}
+
+
 def _content_text_runs(content: list[dict]) -> list[tuple[int, str]]:
     """Return [(doc_start_index, text)] for every text run in a list of structural
     elements, descending into table cells in reading order."""
@@ -582,11 +618,15 @@ def _insert_after_plan(
     text: str,
     require_unique: bool = True,
     occurrence: int | None = None,
+    code_font: str | None = None,
 ) -> dict:
     """Build the insertText request that places `text` after the anchor's paragraph.
 
-    Returns {"kind": "ok", "request": ..., "body_index": ...} or
-    {"kind": "ambiguous", "result": <ambiguous payload>}.
+    Returns {"kind": "ok", "request": ..., "requests": [...], "body_index": ...} or
+    {"kind": "ambiguous", "result": <ambiguous payload>}. Pass `code_font` to set
+    the inserted text in that monospace family; `requests` then carries the style
+    request after the insert, and callers should send `requests` rather than
+    `request`.
     """
     if not anchor:
         raise ValueError("anchor must not be empty")
@@ -647,10 +687,20 @@ def _insert_after_plan(
         and not _paragraph_text(following).strip()
     )
     separator = "\n\n" if blank_line_style else "\n"
+    payload = separator + text
     request = {
-        "insertText": {"location": {"index": insert_index}, "text": separator + text}
+        "insertText": {"location": {"index": insert_index}, "text": payload}
     }
-    return {"kind": "ok", "request": request, "body_index": body_index}
+    requests = [request]
+    if code_font:
+        # The insert lands first in the same batch, so the styled range is the
+        # inserted text itself, minus the separator that keeps it off the anchor.
+        start = insert_index + len(separator)
+        requests.append(_monospace_request(start, insert_index + len(payload), code_font))
+    return {
+        "kind": "ok", "request": request, "requests": requests,
+        "body_index": body_index,
+    }
 
 
 def _insert_table_plan(
@@ -796,11 +846,13 @@ def _insert_before_plan(
     text: str,
     require_unique: bool = True,
     occurrence: int | None = None,
+    code_font: str | None = None,
 ) -> dict:
     """Build the insertText request that places `text` before the anchor's paragraph.
 
     The new paragraph(s) take the anchor paragraph's style. Returns an ok or
-    ambiguous result.
+    ambiguous result. Pass `code_font` to set the inserted text in that monospace
+    family; `requests` then carries the style request after the insert.
     """
     sel = _select_anchor(
         doc, anchor, occurrence, require_unique,
@@ -809,8 +861,17 @@ def _insert_before_plan(
     if sel["kind"] == "ambiguous":
         return sel
     insert_index = sel["element"]["startIndex"]
-    request = {"insertText": {"location": {"index": insert_index}, "text": text + "\n"}}
-    return {"kind": "ok", "request": request, "body_index": sel["body_index"]}
+    payload = text + "\n"
+    request = {"insertText": {"location": {"index": insert_index}, "text": payload}}
+    requests = [request]
+    if code_font:
+        requests.append(
+            _monospace_request(insert_index, insert_index + len(text), code_font)
+        )
+    return {
+        "kind": "ok", "request": request, "requests": requests,
+        "body_index": sel["body_index"],
+    }
 
 
 # The author sets hyperlinks in the O'Reilly red rather than leaving them the default
@@ -3654,7 +3715,7 @@ def prose_check(
 
 def insert_after(
     doc_id_or_url: str, anchor: str, text: str, allow_multiple: bool = False,
-    occurrence: int | None = None,
+    occurrence: int | None = None, code: bool = False,
 ) -> dict:
     """
     Insert `text` as new paragraph(s) after the paragraph containing `anchor`.
@@ -3663,29 +3724,37 @@ def insert_after(
     `text` to create multiple paragraphs. Returns an 'ambiguous' result when the
     anchor is missing or matches several paragraphs (pass allow_multiple to use
     the first, or occurrence=N to pick one).
+
+    Pass code=True for a code block: the inserted text is set in whatever
+    monospace family the document already uses, so it matches the code around it.
     """
     doc_id = _extract_doc_id(doc_id_or_url)
     service = _docs_service()
     doc = service.documents().get(documentId=doc_id).execute()
+    code_font = _document_code_font(doc) if code else None
     plan = _insert_after_plan(
-        doc, anchor, text, require_unique=not allow_multiple, occurrence=occurrence
+        doc, anchor, text, require_unique=not allow_multiple, occurrence=occurrence,
+        code_font=code_font,
     )
     if plan["kind"] == "ambiguous":
         return plan["result"]
     service.documents().batchUpdate(
-        documentId=doc_id, body={"requests": [plan["request"]]}
+        documentId=doc_id, body={"requests": plan["requests"]}
     ).execute()
-    return {
+    result = {
         "status": "inserted",
         "after_body_index": plan["body_index"],
         "anchor": anchor,
         "text": text,
     }
+    if code_font:
+        result["code_font"] = code_font
+    return result
 
 
 def insert_before(
     doc_id_or_url: str, anchor: str, text: str, allow_multiple: bool = False,
-    occurrence: int | None = None,
+    occurrence: int | None = None, code: bool = False,
 ) -> dict:
     """
     Insert `text` as new paragraph(s) before the paragraph containing `anchor`.
@@ -3694,24 +3763,32 @@ def insert_before(
     `text` for multiple paragraphs. Returns an 'ambiguous' result when the anchor
     is missing or matches several paragraphs (pass allow_multiple to use the
     first, or occurrence=N to pick one).
+
+    Pass code=True for a code block: the inserted text is set in whatever
+    monospace family the document already uses.
     """
     doc_id = _extract_doc_id(doc_id_or_url)
     service = _docs_service()
     doc = service.documents().get(documentId=doc_id).execute()
+    code_font = _document_code_font(doc) if code else None
     plan = _insert_before_plan(
-        doc, anchor, text, require_unique=not allow_multiple, occurrence=occurrence
+        doc, anchor, text, require_unique=not allow_multiple, occurrence=occurrence,
+        code_font=code_font,
     )
     if plan["kind"] == "ambiguous":
         return plan["result"]
     service.documents().batchUpdate(
-        documentId=doc_id, body={"requests": [plan["request"]]}
+        documentId=doc_id, body={"requests": plan["requests"]}
     ).execute()
-    return {
+    result = {
         "status": "inserted",
         "before_body_index": plan["body_index"],
         "anchor": anchor,
         "text": text,
     }
+    if code_font:
+        result["code_font"] = code_font
+    return result
 
 
 def link_text(
@@ -4894,6 +4971,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Insert after the Nth matching paragraph (1-based).",
     )
+    p_insert_after.add_argument(
+        "--code",
+        action="store_true",
+        help="Set the inserted text in the document's monospace font, "
+             "for moving or adding a code block.",
+    )
 
     p_insert_before = sub.add_parser(
         "insert-before",
@@ -4913,6 +4996,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p_insert_before.add_argument(
         "--occurrence", type=int, default=None,
         help="Insert before the Nth matching paragraph (1-based).",
+    )
+    p_insert_before.add_argument(
+        "--code", action="store_true",
+        help="Set the inserted text in the document's monospace font, "
+             "for moving or adding a code block.",
     )
 
     p_link = sub.add_parser("link", help="Hyperlink a span of text in a doc.")
@@ -5180,11 +5268,13 @@ def main() -> None:
         result = insert_after(
             args.doc, args.anchor, args.text,
             allow_multiple=args.allow_multiple, occurrence=args.occurrence,
+            code=args.code,
         )
     elif args.command == "insert-before":
         result = insert_before(
             args.doc, args.anchor, args.text,
             allow_multiple=args.allow_multiple, occurrence=args.occurrence,
+            code=args.code,
         )
     elif args.command == "link":
         result = link_text(

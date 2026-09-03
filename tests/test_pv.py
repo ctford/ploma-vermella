@@ -26,6 +26,7 @@ from pv import (
     _default_pdf_output_path,
     _doc_index_at,
     _doc_text_runs,
+    _document_code_font,
     _downscale_image,
     _ebook_convert_command,
     _epub_nav,
@@ -690,6 +691,46 @@ def test_insert_after_plan_builds_request():
     assert plan["body_index"] == 1
     assert plan["request"]["insertText"]["location"]["index"] == 35
     assert plan["request"]["insertText"]["text"] == "\nNEW PARAGRAPH"
+
+def test_document_code_font_finds_the_doc_s_own_monospace():
+    doc = _fake_doc(
+        _para(1, "Prose here.\n"),
+        _para(13, "x = 1\n", font="Roboto Mono"),
+        _para(20, "y = 2\n", font="Roboto Mono"),
+        _para(27, "z\n", font="Courier New"),
+    )
+    assert _document_code_font(doc) == "Roboto Mono"
+
+def test_document_code_font_falls_back_when_no_code_present():
+    assert _document_code_font(_fake_doc(_para(1, "All prose.\n"))) == "Roboto Mono"
+    doc = _fake_doc(_para(1, "All prose.\n"))
+    assert _document_code_font(doc, default="Menlo") == "Menlo"
+
+def test_insert_after_plan_code_font_styles_only_the_inserted_text():
+    doc = _fake_doc(_para(1, "Intro line.\n"), _para(13, "Anchor paragraph here.\n"))
+    plan = _insert_after_plan(doc, "Anchor paragraph", "x = 1", code_font="Roboto Mono")
+    assert plan["kind"] == "ok"
+    insert, style = plan["requests"]
+    assert insert is plan["request"]
+    assert insert["insertText"]["text"] == "\nx = 1"
+    # The separator keeps the block off its anchor and must stay unstyled.
+    assert style["updateTextStyle"]["range"] == {"startIndex": 36, "endIndex": 41}
+    family = style["updateTextStyle"]["textStyle"]["weightedFontFamily"]["fontFamily"]
+    assert family == "Roboto Mono"
+
+def test_insert_after_plan_without_code_font_sends_one_request():
+    doc = _fake_doc(_para(1, "Anchor paragraph here.\n"))
+    plan = _insert_after_plan(doc, "Anchor paragraph", "prose")
+    assert plan["requests"] == [plan["request"]]
+
+def test_insert_before_plan_code_font_styles_the_inserted_text():
+    doc = _fake_doc(_para(1, "Target paragraph.\n"))
+    plan = _insert_before_plan(doc, "Target paragraph", "x = 1", code_font="Menlo")
+    insert, style = plan["requests"]
+    assert insert["insertText"]["text"] == "x = 1\n"
+    assert style["updateTextStyle"]["range"] == {"startIndex": 1, "endIndex": 6}
+    fam = style["updateTextStyle"]["textStyle"]["weightedFontFamily"]["fontFamily"]
+    assert fam == "Menlo"
 
 def test_insert_after_plan_missing_anchor_is_ambiguous():
     plan = _insert_after_plan(_fake_doc(_para(1, "x\n")), "nope", "y")
