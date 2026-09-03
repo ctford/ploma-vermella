@@ -1699,7 +1699,6 @@ _SENTENCE_SPLIT = re.compile(r"""(?<=[.!?])(?:\]\([^)]*\))?["'\u201d\u2019)\]]*\
 _LONG_SENTENCE_WORDS = 35
 _SENTENCE_MEAN_TARGET = (20.0, 24.0)
 _EM_DASH_WORDS_PER = 150
-_EM_DASH_WORDS_MAX = 200
 _PARAGRAPH_MAX_WORDS = 120
 _SENTENCE_MAX_WORDS = 45
 # A tolerance, not a ceiling: runaway sentences and paragraphs stay under this rate
@@ -1945,14 +1944,16 @@ def _prose_text_checks(
     em_dashes = measured.count("—")
     per = word_count // em_dashes if em_dashes else 0
     checks.append(_check(
-        # A band has two sides. Stripping em-dashes to clear a "too dense" flag can
-        # overshoot: Chapter 8 went from 1 per 141 words to 1 per 257 in two days of
-        # editing and the check stayed green the whole way, because it only ever looked
-        # at the crowded end.
+        # Density only. An upper bound was tried and removed on 2026-09-03: sparse
+        # em-dashes are not a defect, they are just plainer prose, and the bound was
+        # failing 6 of 14 sections for writing that reads fine. It had been added for a
+        # real reason — Chapter 8 drifted from 1 per 141 words to 1 per 257 during an
+        # editing sweep and the check stayed green throughout — so if a future sweep
+        # over-strips, that is a risk carried deliberately, not one nobody saw.
         "em_dash_density",
-        "ok" if em_dashes and _EM_DASH_WORDS_PER <= per <= _EM_DASH_WORDS_MAX else "review",
+        "ok" if not em_dashes or per >= _EM_DASH_WORDS_PER else "review",
         f"{em_dashes} total, 1 per {per} words" if em_dashes else "0",
-        f"1 per {_EM_DASH_WORDS_PER}-{_EM_DASH_WORDS_MAX} words",
+        f"no denser than 1 per {_EM_DASH_WORDS_PER} words",
     ))
 
     # Two tiers, as the book itself recommends for code health: a hard ceiling that

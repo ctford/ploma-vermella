@@ -1926,12 +1926,18 @@ def test_insert_after_matches_the_document_paragraph_spacing():
     assert plan["request"]["insertText"]["text"] == "\nNew text."
 
 
-def test_prose_text_checks_em_dash_density_is_a_two_sided_band():
-    """Too few is a finding too: stripping em-dashes to clear a flag can overshoot."""
+def test_prose_text_checks_em_dash_density_flags_only_crowding():
+    """Author's call 2026-09-03: sparse em-dashes are plainer prose, not a defect.
+
+    The upper bound was removed after it failed 6 of 14 sections for writing that
+    reads fine. Crowding is still a finding.
+    """
+    dense = " ".join(["word"] * 80) + " — one aside."
+    assert _named(_prose_text_checks(dense), "em_dash_density")["status"] == "review"
     sparse = " ".join(["word"] * 400) + " — one aside."
-    assert _named(_prose_text_checks(sparse), "em_dash_density")["status"] == "review"
-    in_band = " ".join(["word"] * 170) + " — one aside."
-    assert _named(_prose_text_checks(in_band), "em_dash_density")["status"] == "ok"
+    assert _named(_prose_text_checks(sparse), "em_dash_density")["status"] == "ok"
+    none_at_all = " ".join(["word"] * 400) + "."
+    assert _named(_prose_text_checks(none_at_all), "em_dash_density")["status"] == "ok"
 
 
 def test_sentences_do_not_run_across_paragraph_breaks():
