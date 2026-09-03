@@ -1968,6 +1968,21 @@ def test_runaway_gate_is_a_tolerance_not_a_ceiling():
                   "sentences_over_45_words")["status"] == "ok", "1 in 40 = 2.5%"
 
 
+def test_sentence_split_handles_closing_delimiters_and_links():
+    """A sentence can end behind a bracket, a quote, or a linked title.
+
+    Measured on the manuscript 2026-09-03: 15 of 146 runaway sentences were two
+    sentences welded by this, not long prose. Both shapes are common in cited text.
+    """
+    assert len(_sentences("Ends inside.) The next one starts here.")) == 2
+    assert len(_sentences(
+        "See [Who Needs an Architect?](http://example.com/a) At least for now.")) == 2
+    assert len(_sentences('He said "stop." Then he left.')) == 2
+    assert len(_sentences("Plain one. Plain two.")) == 2
+    # A mid-sentence link must not split, or every citation becomes two sentences.
+    assert len(_sentences("As [Morris](http://example.com/b) writes, it is so.")) == 1
+
+
 def test_prose_metrics_ignore_a_rendered_table():
     """A table renders as 'a | b' with no full stop, so counting it wrecks the mean."""
     prose = "Short sentence here. Another short one follows it now.\n"

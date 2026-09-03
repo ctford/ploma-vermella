@@ -1687,7 +1687,15 @@ def _table_update_plan(
 # still a failure to apply, and the exit code has to say so.
 _UNAPPLIED_STATUSES = frozenset({"ambiguous", "not_found", "no_match"})
 
-_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+# A sentence can end behind a closing delimiter or a link. Splitting only on
+# "[.!?] whitespace" welds two sentences into one whenever the first ends inside
+# parentheses ("...until damping is added.) The damping term is...") or inside a
+# linked title ("...his 2003 essay [Who Needs an Architect?](url) At least for
+# now..."). Measured 2026-09-03: 15 of the manuscript's 146 runaway sentences were
+# this artifact rather than long prose, and they cluster in the chapters that cite
+# most heavily. So consume an optional markdown link tail and any closing quotes or
+# brackets before the whitespace.
+_SENTENCE_SPLIT = re.compile(r"""(?<=[.!?])(?:\]\([^)]*\))?["'\u201d\u2019)\]]*\s+""")
 _LONG_SENTENCE_WORDS = 35
 _SENTENCE_MEAN_TARGET = (20.0, 24.0)
 _EM_DASH_WORDS_PER = 150
