@@ -2251,6 +2251,21 @@ def _parse_terms(lines) -> list[tuple[str, str | None]]:
     return terms
 
 
+def _same_chapter(home: str, chapter: str) -> bool:
+    """Compare a term's home chapter with the document's, tolerating zero-padding.
+
+    `terms.txt` writes homes zero-padded (`= 05`) while the CLI is naturally given the
+    bare number (`--chapter 5`). A raw string compare made every one of a chapter's own
+    terms look borrowed: measured 2026-09-04, Chapter 5 reported 26 terms "italicized
+    away from their home chapter" and 0 missing first-use italics under `--chapter 5`,
+    against 0 and 9 under `--chapter 05`. Both numbers were wrong, silently.
+    """
+    a, b = home.strip(), chapter.strip()
+    if a.isdigit() and b.isdigit():
+        return int(a) == int(b)
+    return a.lower() == b.lower()
+
+
 def _terms_italics_scope(
     text: str, spans: list[tuple[int, str]],
     terms: list[tuple[str, str | None]], chapter: str | None = None,
@@ -2276,7 +2291,7 @@ def _terms_italics_scope(
         match = re.search(rf"\b{re.escape(key)}\b", lowered)
         if match is None:
             continue
-        if chapter is not None and home is not None and home != chapter:
+        if chapter is not None and home is not None and not _same_chapter(home, chapter):
             # Introduced elsewhere: it should be plain everywhere here.
             if any(
                 re.fullmatch(rf"\W*{re.escape(key)}\W*", _span_text(raw).strip().lower())

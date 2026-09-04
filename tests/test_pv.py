@@ -76,6 +76,7 @@ from pv import (
     _replace_image_plan,
     _replace_section_plan,
     _review_copy_title,
+    _same_chapter,
     _sentences,
     _shade_plan,
     _shape_text,
@@ -2250,6 +2251,20 @@ def test_terms_italics_scope_flags_a_borrowed_term_set_in_italics():
         text, [(2, "setpoint")], [("setpoint", "06")], chapter="07",
     )
     assert away == ["setpoint"]
+
+
+def test_terms_italics_scope_tolerates_zero_padded_chapter_numbers():
+    """terms.txt writes `= 05`; the CLI is naturally given `--chapter 5`.
+
+    Measured 2026-09-04: a raw string compare reported 26 of Chapter 5's own terms as
+    "italicized away from their home chapter" under `--chapter 5`, and 0 under
+    `--chapter 05`. Both forms must agree.
+    """
+    assert _same_chapter("05", "5")
+    assert _same_chapter("5", "05")
+    assert _same_chapter("13", "13")
+    assert not _same_chapter("05", "6")
+    assert not _same_chapter("11", "1")
 
 
 def test_terms_italics_scope_still_checks_a_term_in_its_home_chapter():
