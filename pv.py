@@ -1721,13 +1721,13 @@ _RUNAWAY_TOLERANCE = 5.0
 # editor herself, which makes the check cry wolf.
 _LONG_SENTENCE_WORDS_PER = 180
 _NESTED_ASIDE_WORDS_PER = 1200
-# Passive rate, as a share of sentences carrying at least one regex hit. Measured
-# over the prose of all 14 manuscript docs 2026-09-03: book 10.6%, range 4.2%
-# (Ch 11) to 13.6% (Ch 5). Pinned at 12.5% because Chapter 7 — the one chapter
-# Sarah has reviewed and signed off — sits at 12.4%, so a tighter gate would fail
-# the chapter the targets are calibrated on. Author's intent is to ratchet this to
-# 10% once Ch 7 has been swept.
-_PASSIVE_SENTENCE_PCT = 12.5
+# Passive rate, as a share of sentences carrying at least one regex hit. Ratcheted
+# 12.5 -> 10.0 on 2026-09-04, once the sweep had taken every manuscript document
+# under it. Range at that point: 4.2% (Ch 11) to 9.9% (Ch 2). The old gate was set
+# by Chapter 7, the chapter the editor signed off, which measured 12.4%; sweeping
+# Ch 7 to 7.9% is what made the tighter gate defensible. Note Ch 2 clears 10% by
+# only 0.1, so a handful of added passives will trip it.
+_PASSIVE_SENTENCE_PCT = 10.0
 
 _PASSIVE_RE = re.compile(
     r"\b(?:is|are|was|were|be|been|being)\s+(?:\w+ly\s+)?\w+(?:ed|en)\b", re.I
