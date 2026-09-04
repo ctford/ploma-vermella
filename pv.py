@@ -950,12 +950,17 @@ def _style_plan(
     color: str | None = None,
     all_occurrences: bool = False,
     occurrence: int | None = None,
+    monospace: str | None = None,
 ) -> dict:
     """Build updateTextStyle requests applying character styles to `text`.
 
     Each of italic/bold/underline is tri-state: None leaves it untouched, True
-    turns it on, False turns it off. Returns {"kind": "ok", "requests": [...],
-    "spans": [...]} or {"kind": "ambiguous", "result": <ambiguous payload>}.
+    turns it on, False turns it off. `monospace` sets the font family, which is
+    what repairs a code line whose first character lost its typeface — a common
+    Google Docs artifact that makes `_is_code_paragraph` reject the whole
+    paragraph, so the EPUB renders the listing in the body serif. Returns
+    {"kind": "ok", "requests": [...], "spans": [...]} or
+    {"kind": "ambiguous", "result": <ambiguous payload>}.
     """
     style: dict = {}
     fields: list[str] = []
@@ -971,8 +976,13 @@ def _style_plan(
     if color:
         style["foregroundColor"] = {"color": {"rgbColor": _parse_hex_color(color)}}
         fields.append("foregroundColor")
+    if monospace:
+        style["weightedFontFamily"] = {"fontFamily": monospace}
+        fields.append("weightedFontFamily")
     if not fields:
-        raise ValueError("specify at least one of italic, bold, underline, or color")
+        raise ValueError(
+            "specify at least one of italic, bold, underline, color, or monospace"
+        )
 
     matches = _find_matches(doc, text)
     sel = _select_matches(
@@ -4210,30 +4220,40 @@ def style_text(
     color: str | None = None,
     all_occurrences: bool = False,
     occurrence: int | None = None,
+    monospace: str | None = None,
 ) -> dict:
     """
-    Apply character styling (italic/bold/underline/color) to occurrences of `text`,
-    preserving other styling. Requires a single match unless all_occurrences is set
-    or occurrence=N is given; otherwise returns an 'ambiguous' result.
+    Apply character styling (italic/bold/underline/color/monospace) to occurrences of
+    `text`, preserving other styling. Requires a single match unless all_occurrences is
+    set or occurrence=N is given; otherwise returns an 'ambiguous' result.
+
+    `monospace=""` resolves to whatever monospace family the document already uses for
+    code, so a repaired span matches the listing around it.
     """
     doc_id = _extract_doc_id(doc_id_or_url)
     service = _docs_service()
     doc = service.documents().get(documentId=doc_id).execute()
+    if monospace == "":
+        monospace = _document_code_font(doc)
     plan = _style_plan(
         doc, text, italic=italic, bold=bold, underline=underline,
         color=color, all_occurrences=all_occurrences, occurrence=occurrence,
+        monospace=monospace,
     )
     if plan["kind"] == "ambiguous":
         return plan["result"]
     service.documents().batchUpdate(
         documentId=doc_id, body={"requests": plan["requests"]}
     ).execute()
-    return {
+    result = {
         "status": "styled",
         "text": text,
         "occurrences": len(plan["spans"]),
         "spans": plan["spans"],
     }
+    if monospace:
+        result["font"] = monospace
+    return result
 
 
 def build_epub(
@@ -5353,6 +5373,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p_style.add_argument("--no-bold", action="store_true", help="Turn bold off.")
     p_style.add_argument("--no-underline", action="store_true", help="Turn underline off.")
     p_style.add_argument("--color", metavar="HEX", help="Foreground color, e.g. #d3002d.")
+    p_style.add_argument(
+        "--monospace",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="FONT",
+        help="Set the text in a monospace family. With no value, uses the family "
+             "the document already uses for code.",
+    )
     p_style.add_argument(
         "--all",
         action="store_true",

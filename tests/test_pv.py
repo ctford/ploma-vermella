@@ -2255,6 +2255,34 @@ def test_terms_italics_scope_flags_a_borrowed_term_set_in_italics():
     assert away == ["setpoint"]
 
 
+def test_style_plan_sets_a_monospace_family():
+    """Added 2026-09-04: repairing a code line's lost typeface needed the raw API.
+
+    Google Docs sometimes leaves the first character of a code paragraph in the body
+    font. `_is_code_paragraph` then rejects the whole paragraph and the EPUB renders
+    the listing in the body serif, so the repair has to set a font family.
+    """
+    doc = _fake_doc(_para(1, "check(\n"))
+    plan = _style_plan(doc, "check(", monospace="Roboto Mono")
+    style = plan["requests"][0]["updateTextStyle"]
+    assert style["textStyle"]["weightedFontFamily"] == {"fontFamily": "Roboto Mono"}
+    assert style["fields"] == "weightedFontFamily"
+
+
+def test_style_plan_combines_monospace_with_other_styles():
+    plan = _style_plan(_fake_doc(_para(1, "check(\n")), "check(",
+                       italic=True, monospace="Menlo")
+    style = plan["requests"][0]["updateTextStyle"]
+    assert style["textStyle"]["italic"] is True
+    assert style["textStyle"]["weightedFontFamily"] == {"fontFamily": "Menlo"}
+    assert set(style["fields"].split(",")) == {"italic", "weightedFontFamily"}
+
+
+def test_style_plan_still_requires_at_least_one_style():
+    with pytest.raises(ValueError, match="monospace"):
+        _style_plan(_fake_doc(_para(1, "text\n")), "text")
+
+
 def test_blocks_to_xhtml_renders_code_paragraphs_as_one_pre_block():
     """Code has to keep its typeface in the EPUB and PDF.
 

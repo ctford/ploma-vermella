@@ -95,6 +95,10 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
                                                        # links are set in the O'Reilly red (d3002d) by default,
                                                        # not the default blue; --no-color opts out
 .venv/bin/pv style <doc-url> <text> [--italic|--bold|--underline|--no-italic|--no-bold|--no-underline|--color HEX] [--all]  # character styling (turn styles on, or off with --no-*)
+.venv/bin/pv style <doc-url> <text> --monospace [FONT]  # set a span in a monospace family; bare --monospace
+                                                       # uses the family the doc already uses for code. Repairs a code
+                                                       # line whose first character lost its typeface — Docs does this,
+                                                       # and it makes the whole paragraph render in the body serif.
 .venv/bin/pv heading <doc-url> <anchor> <level>        # set a paragraph's style (1-6, normal, title) by anchor
 .venv/bin/pv bullets <doc-url> <start> [end] [--ordered] [--remove]  # make a paragraph range a bulleted/numbered list (or strip bullets)
 .venv/bin/pv table <doc-url> <anchor> <rows-json> [--before] [--header]  # insert a table next to an anchor paragraph;
