@@ -28,6 +28,7 @@ from pv import (
     _doc_index_at,
     _doc_text_runs,
     _document_code_font,
+    _dominant_char_style,
     _downscale_image,
     _ebook_convert_command,
     _epub_nav,
@@ -2253,6 +2254,28 @@ def test_terms_italics_scope_flags_a_borrowed_term_set_in_italics():
         text, [(2, "setpoint")], [("setpoint", "06")], chapter="07",
     )
     assert away == ["setpoint"]
+
+
+def test_dominant_char_style_returns_nothing_for_a_uniform_span():
+    """A wholly italic replacement must stay italic."""
+    styles = [(1, 10, {"italic": True}), (10, 20, {"italic": True})]
+    assert _dominant_char_style(styles, 1, 20) == {}
+
+
+def test_dominant_char_style_picks_the_majority_across_a_mixed_span():
+    """An anchor starting at an italic term and running into plain prose.
+
+    Docs gives inserted text the preceding character's style, so without this the
+    term's italics spread across its whole definition — which is what happened to
+    four definitions on 2026-09-04.
+    """
+    styles = [(1, 13, {"italic": True}), (13, 60, {})]   # term, then a longer definition
+    assert _dominant_char_style(styles, 1, 60) == {"italic": False}
+
+
+def test_dominant_char_style_keeps_italics_when_the_italic_part_dominates():
+    styles = [(1, 50, {"italic": True}), (50, 55, {})]
+    assert _dominant_char_style(styles, 1, 55) == {"italic": True}
 
 
 def test_style_plan_sets_a_monospace_family():

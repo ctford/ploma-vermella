@@ -3753,6 +3753,31 @@ def _fuzzy_candidates(flat: str, nflat: str, nold: str, min_len: int = 8) -> lis
     return [{"matched_chars": block.size, "context": f"...{ctx}..."}]
 
 
+def _dominant_char_style(styles: list[tuple[int, int, dict]], start: int, end: int) -> dict:
+    """The italic/bold state covering most characters of [start, end).
+
+    Google Docs gives inserted text the style of the character before it. When an
+    anchor begins at an italic term and runs on into plain prose — `*Transferable*,
+    in the sense that…` — the whole replacement silently comes back italic. Four
+    definitions were italicized this way on 2026-09-04 before it was noticed.
+
+    Returns {} when the span is uniform, so a wholly italic replacement stays italic.
+    """
+    weight: dict[str, dict[bool, int]] = {"italic": {}, "bold": {}}
+    for run_start, run_end, style in styles:
+        overlap = min(end, run_end) - max(start, run_start)
+        if overlap <= 0:
+            continue
+        for attr in weight:
+            value = bool(style.get(attr))
+            weight[attr][value] = weight[attr].get(value, 0) + overlap
+    out = {}
+    for attr, counts in weight.items():
+        if len(counts) > 1:                       # mixed across the span
+            out[attr] = max(counts, key=counts.get)
+    return out
+
+
 def _plan_edit_matches(
     flat: str,
     nflat: str,
@@ -3844,13 +3869,23 @@ def edit_document(
         return plan["result"]
     positions = plan["positions"]
 
+    styles = _content_run_styles(doc.get("body", {}).get("content", []))
     requests = []
     for flat_pos in sorted(positions, reverse=True):
         start = _doc_index_at(runs, flat_pos)
         end = start + _utf16_len(old)
+        # Capture before deleting: an insert inherits the preceding character's style,
+        # which silently spreads a term's italics across its whole definition.
+        dominant = _dominant_char_style(styles, start, end)
         requests.append({"deleteContentRange": {"range": {"startIndex": start, "endIndex": end}}})
         if new:
             requests.append({"insertText": {"location": {"index": start}, "text": new}})
+            if dominant:
+                requests.append({"updateTextStyle": {
+                    "range": {"startIndex": start, "endIndex": start + _utf16_len(new)},
+                    "textStyle": dominant,
+                    "fields": ",".join(sorted(dominant)),
+                }})
 
     service.documents().batchUpdate(documentId=doc_id, body={"requests": requests}).execute()
     return {"status": "edited", "occurrences_replaced": len(positions), "old": old, "new": new}
