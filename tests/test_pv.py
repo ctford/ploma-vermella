@@ -405,7 +405,8 @@ def test_extract_blocks_preserves_structure_and_stops_at_review():
     assert _extract_blocks(BLOCK_DOC) == [
         {"type": "heading", "level": 1, "text": "Chapter Title", "html": "Chapter Title"},
         {"type": "heading", "level": 2, "text": "Section", "html": "Section"},
-        {"type": "paragraph", "text": "Body paragraph.", "html": "Body paragraph."},
+        {"type": "paragraph", "text": "Body paragraph.", "html": "Body paragraph.",
+             "code": False},
         {"type": "list_item", "text": "Bullet item", "html": "Bullet item"},
     ]
 
@@ -421,7 +422,8 @@ def test_extract_blocks_emits_image_block():
     ]}}
     assert _extract_blocks(doc) == [
         {"type": "image", "object_id": "kix.img1"},
-        {"type": "paragraph", "text": "Figure 1-1. A caption.", "html": "Figure 1-1. A caption."},
+        {"type": "paragraph", "text": "Figure 1-1. A caption.",
+         "html": "Figure 1-1. A caption.", "code": False},
     ]
 
 
@@ -2251,6 +2253,70 @@ def test_terms_italics_scope_flags_a_borrowed_term_set_in_italics():
         text, [(2, "setpoint")], [("setpoint", "06")], chapter="07",
     )
     assert away == ["setpoint"]
+
+
+def test_blocks_to_xhtml_renders_code_paragraphs_as_one_pre_block():
+    """Code has to keep its typeface in the EPUB and PDF.
+
+    Before 2026-09-04 `_extract_blocks` never carried `_is_code_paragraph` through, so
+    every listing rendered as one ordinary <p> per line in the body serif, with no
+    monospace rule anywhere in the stylesheet.
+    """
+    out = _blocks_to_xhtml("Ch", [
+        {"type": "paragraph", "text": "Prose.", "html": "Prose.", "code": False},
+        {"type": "paragraph", "text": "check(", "html": "check(", "code": True},
+        {"type": "paragraph", "text": "  x == 1", "html": "  x == 1", "code": True},
+        {"type": "paragraph", "text": ")", "html": ")", "code": True},
+        {"type": "paragraph", "text": "After.", "html": "After.", "code": False},
+    ])
+    assert out.count("<pre><code>") == 1          # consecutive lines coalesce
+    assert out.count("</code></pre>") == 1
+    assert "check(\n  x == 1\n)\n" in out         # order and indentation kept
+    assert "<p>Prose.</p>" in out and "<p>After.</p>" in out
+
+
+def test_inline_html_wraps_monospace_runs_in_code():
+    """Inline code loses its typeface unless the run's font family is honoured."""
+    out = _inline_html([
+        {"textRun": {"content": "Set ", "textStyle": {}}},
+        {"textRun": {"content": "AGENTS.md", "textStyle": {
+            "weightedFontFamily": {"fontFamily": "Roboto Mono"}}}},
+        {"textRun": {"content": " first.", "textStyle": {}}},
+    ])
+    assert out == "Set <code>AGENTS.md</code> first."
+
+
+def test_blocks_to_xhtml_renders_sidebar_markers_as_a_styled_aside():
+    """`<SIDEBAR>`…`</SIDEBAR>` are structure, not prose.
+
+    Before 2026-09-04 the build passed them through and 20 literal markers appeared in
+    the rendered EPUB and PDF.
+    """
+    blocks = [
+        {"type": "paragraph", "text": "Before."},
+        {"type": "paragraph", "text": "<SIDEBAR>"},
+        {"type": "heading", "level": 2, "text": "Example: Knowledge graph"},
+        {"type": "paragraph", "text": "Inside."},
+        {"type": "paragraph", "text": "</SIDEBAR>"},
+        {"type": "paragraph", "text": "After."},
+    ]
+    out = _blocks_to_xhtml("Ch", blocks)
+    assert "SIDEBAR" not in out
+    assert '<aside class="sidebar">' in out
+    assert out.count("</aside>") == 1
+    assert out.index('<aside class="sidebar">') < out.index("Inside.") < out.index("</aside>")
+    assert out.index("Before.") < out.index('<aside class="sidebar">')
+    assert out.index("</aside>") < out.index("After.")
+
+
+def test_blocks_to_xhtml_closes_an_unterminated_sidebar():
+    """A missing `</SIDEBAR>` must not produce unbalanced XHTML."""
+    out = _blocks_to_xhtml("Ch", [
+        {"type": "paragraph", "text": "<sidebar>"},
+        {"type": "paragraph", "text": "Inside."},
+    ])
+    assert out.count('<aside class="sidebar">') == 1
+    assert out.count("</aside>") == 1
 
 
 def test_find_matches_reports_italic_and_bold():

@@ -2541,6 +2541,9 @@ def _inline_html(elements: list[dict]) -> str:
             fragment = f"<em>{fragment}</em>"
         if style.get("bold"):
             fragment = f"<strong>{fragment}</strong>"
+        family = style.get("weightedFontFamily", {}).get("fontFamily", "")
+        if family in _MONOSPACE_FONTS:
+            fragment = f"<code>{fragment}</code>"
         link_url = style.get("link", {}).get("url")
         if link_url:
             fragment = f'<a href="{html.escape(link_url, quote=True)}">{fragment}</a>'
@@ -2623,7 +2626,10 @@ def _extract_blocks(doc: dict) -> list[dict]:
         elif style in {"HEADING_3", "HEADING_4"}:
             blocks.append({"type": "heading", "level": 4, "text": text, "html": inline})
         else:
-            blocks.append({"type": "paragraph", "text": text, "html": inline})
+            blocks.append({
+                "type": "paragraph", "text": text, "html": inline,
+                "code": _is_code_paragraph(element),
+            })
 
     return blocks
 
@@ -2736,6 +2742,22 @@ def _downscale_image(data: bytes, media_type: str, max_width: int) -> tuple[byte
         return data, media_type
 
 
+_SIDEBAR_RE = re.compile(r"^\s*<\s*(/?)\s*sidebar\s*>\s*$", re.IGNORECASE)
+
+
+def _sidebar_marker(block: dict) -> str | None:
+    """"open"/"close" if a block is a bare `<sidebar>` delimiter, else None.
+
+    The manuscript marks sidebars with `<SIDEBAR>`…`</SIDEBAR>` paragraphs. They are
+    structure, not prose: before 2026-09-04 the build passed them straight through and
+    20 literal markers appeared in the rendered EPUB and PDF.
+    """
+    match = _SIDEBAR_RE.match(block.get("text", "") or "")
+    if match is None:
+        return None
+    return "close" if match.group(1) else "open"
+
+
 def _block_html(block: dict) -> str:
     """Inner HTML for a text block: prefer rich inline html, else escape text."""
     inline = block.get("html")
@@ -2751,8 +2773,23 @@ def _blocks_to_xhtml(title: str, blocks: list[dict], image_paths: dict | None = 
     image_paths = image_paths or {}
     parts = []
     in_list = False
+    in_sidebar = False
+    in_code = False
     for block in blocks:
         block_type = block["type"]
+
+        marker = _sidebar_marker(block)
+        if marker is not None:
+            if in_list:
+                parts.append("</ul>")
+                in_list = False
+            if marker == "open" and not in_sidebar:
+                parts.append('<aside class="sidebar">')
+                in_sidebar = True
+            elif marker == "close" and in_sidebar:
+                parts.append("</aside>")
+                in_sidebar = False
+            continue
 
         if block_type == "list_item":
             if not in_list:
@@ -2764,6 +2801,16 @@ def _blocks_to_xhtml(title: str, blocks: list[dict], image_paths: dict | None = 
         if in_list:
             parts.append("</ul>")
             in_list = False
+
+        if block.get("code") and block_type == "paragraph":
+            line = html.escape(block.get("text", ""))
+            if in_code:
+                parts[-1] = parts[-1][: -len("</code></pre>")] + line + "\n</code></pre>"
+            else:
+                parts.append(f"<pre><code>{line}\n</code></pre>")
+                in_code = True
+            continue
+        in_code = False
 
         if block_type == "table":
             rows = block.get("rows") or []
@@ -2791,6 +2838,8 @@ def _blocks_to_xhtml(title: str, blocks: list[dict], image_paths: dict | None = 
 
     if in_list:
         parts.append("</ul>")
+    if in_sidebar:
+        parts.append("</aside>")
 
     body = "\n    ".join(parts)
     doc_title = html.escape(title)
@@ -4322,6 +4371,24 @@ def build_epub(
         "text-transform: uppercase; letter-spacing: 0.03em; }\n"
         ".toc-page li.toc-part ol { margin: 0.3em 0 0 1.5em; }\n"
         ".toc-page li.toc-part li { font-weight: normal; text-transform: none; }\n"
+        # Sidebars carry a light-grey ground in both EPUB and PDF. print-color-adjust
+        # keeps the fill when Calibre renders to PDF, which otherwise drops backgrounds;
+        # the left rule means the block still reads as a sidebar if a device ignores it.
+        "aside.sidebar { background: #f2f2f2; color: #000; "
+        "border-left: 3px solid #999; padding: 0.8em 1em; margin: 1.4em 0; "
+        "-webkit-print-color-adjust: exact; print-color-adjust: exact; }\n"
+        "aside.sidebar > :first-child { margin-top: 0; }\n"
+        "aside.sidebar > :last-child { margin-bottom: 0; }\n"
+        # Code has to keep its typeface in both formats. Before 2026-09-04 a code
+        # paragraph became an ordinary <p> with no monospace anywhere in the stylesheet,
+        # so every listing rendered in the body serif.
+        "pre { background: #f7f7f7; border: 1px solid #ddd; padding: 0.7em 0.9em; "
+        "margin: 1em 0; overflow-x: auto; white-space: pre-wrap; "
+        "word-wrap: break-word; -webkit-print-color-adjust: exact; "
+        "print-color-adjust: exact; }\n"
+        "pre code { background: none; border: 0; padding: 0; font-size: 0.85em; }\n"
+        "code { font-family: \"Roboto Mono\", \"Courier New\", monospace; "
+        "font-size: 0.9em; }\n"
     )
 
     with zipfile.ZipFile(output_path, "w") as epub:
