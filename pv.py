@@ -488,6 +488,43 @@ def _content_text_runs(content: list[dict]) -> list[tuple[int, str]]:
     return runs
 
 
+def _content_run_styles(content: list[dict]) -> list[tuple[int, int, dict]]:
+    """Return [(start_index, end_index, textStyle)] for every text run, in reading order.
+
+    Mirrors `_content_text_runs` but keeps the style, so a match located by
+    `_find_matches` (which works in document indices) can be asked whether it is
+    italic or bold. `_italic_spans` cannot answer that: it measures in *rendered*
+    text offsets, which drift from document indices by the markup of every link.
+    """
+    styles = []
+    for el in content:
+        paragraph = el.get("paragraph")
+        if paragraph is not None:
+            for pe in paragraph.get("elements", []):
+                text_run = pe.get("textRun")
+                if text_run is not None:
+                    start = pe["startIndex"]
+                    styles.append(
+                        (start, start + _utf16_len(text_run.get("content", "")),
+                         text_run.get("textStyle", {}))
+                    )
+            continue
+        table = el.get("table")
+        if table is not None:
+            for row in table.get("tableRows", []):
+                for cell in row.get("tableCells", []):
+                    styles.extend(_content_run_styles(cell.get("content", [])))
+    return styles
+
+
+def _style_at(styles: list[tuple[int, int, dict]], index: int) -> dict:
+    """The textStyle covering a document index, or {} if none does."""
+    for start, end, style in styles:
+        if start <= index < end:
+            return style
+    return {}
+
+
 def _doc_text_runs(element_source: dict) -> list[tuple[int, str]]:
     """Return [(doc_start_index, text)] for every text run in the document body,
     including text inside table cells (in reading order)."""
@@ -521,6 +558,7 @@ def _find_matches(doc: dict, text: str) -> list[dict]:
         raise ValueError("search text must not be empty")
     content = doc.get("body", {}).get("content", [])
     runs = _doc_text_runs(doc)
+    styles = _content_run_styles(content)
     flat = "".join(t for _, t in runs)
     # Match on quote-normalized text; normalization is position-preserving.
     nflat = _normalize_quotes(flat)
@@ -540,6 +578,8 @@ def _find_matches(doc: dict, text: str) -> list[dict]:
                 if el else ""
             ),
             "is_code": _is_code_paragraph(el) if el else False,
+            "italic": bool(_style_at(styles, start_index).get("italic")),
+            "bold": bool(_style_at(styles, start_index).get("bold")),
             "context": _paragraph_text(el).strip() if el else "",
         })
         pos = nflat.find(ntext, pos + 1)

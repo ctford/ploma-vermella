@@ -2253,6 +2253,31 @@ def test_terms_italics_scope_flags_a_borrowed_term_set_in_italics():
     assert away == ["setpoint"]
 
 
+def test_find_matches_reports_italic_and_bold():
+    """`pv find` has to surface character styling, not just paragraph style.
+
+    Fixing "italicized more than once" and "italicized away from home chapter" means
+    removing italics from a *particular* later occurrence, and until 2026-09-04 there
+    was no way to see which occurrence carried them. `_italic_spans` cannot answer it:
+    it measures in rendered-text offsets, which drift from document indices by the
+    markup of every preceding link.
+    """
+    doc = _fake_doc({
+        "startIndex": 1,
+        "paragraph": {"elements": [
+            {"startIndex": 1, "textRun": {"content": "plain ", "textStyle": {}}},
+            {"startIndex": 7, "textRun": {"content": "damping", "textStyle": {"italic": True}}},
+            {"startIndex": 14, "textRun": {"content": " and ", "textStyle": {}}},
+            {"startIndex": 19, "textRun": {"content": "bold", "textStyle": {"bold": True}}},
+            {"startIndex": 23, "textRun": {"content": ".\n", "textStyle": {}}},
+        ]},
+    })
+    assert _find_matches(doc, "damping")[0]["italic"] is True
+    assert _find_matches(doc, "damping")[0]["bold"] is False
+    assert _find_matches(doc, "bold")[0]["bold"] is True
+    assert _find_matches(doc, "plain")[0]["italic"] is False
+
+
 def test_terms_italics_scope_tolerates_zero_padded_chapter_numbers():
     """terms.txt writes `= 05`; the CLI is naturally given `--chapter 5`.
 
