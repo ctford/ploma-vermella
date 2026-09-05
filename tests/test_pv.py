@@ -51,6 +51,7 @@ from pv import (
     _insert_table_plan,
     _is_code_paragraph,
     _is_image_paragraph,
+    _is_indented_paragraph,
     _is_table_separator,
     _italic_runs_in_context,
     _italic_runs_past_term,
@@ -410,7 +411,7 @@ def test_extract_blocks_preserves_structure_and_stops_at_review():
         {"type": "heading", "level": 1, "text": "Chapter Title", "html": "Chapter Title"},
         {"type": "heading", "level": 2, "text": "Section", "html": "Section"},
         {"type": "paragraph", "text": "Body paragraph.", "html": "Body paragraph.",
-             "code": False},
+             "code": False, "indented": False},
         {"type": "list_item", "text": "Bullet item", "html": "Bullet item"},
     ]
 
@@ -427,7 +428,7 @@ def test_extract_blocks_emits_image_block():
     assert _extract_blocks(doc) == [
         {"type": "image", "object_id": "kix.img1"},
         {"type": "paragraph", "text": "Figure 1-1. A caption.",
-         "html": "Figure 1-1. A caption.", "code": False},
+         "html": "Figure 1-1. A caption.", "code": False, "indented": False},
     ]
 
 
@@ -2859,3 +2860,53 @@ def test_guarded_batch_update_reraises_unrelated_http_errors():
         pv._guarded_batch_update(
             _fake_docs_service({}, raise_error=err), "doc1", [{"x": 1}], {"revisionId": "old"},
         )
+
+
+def test_is_indented_paragraph_reads_the_left_indent():
+    assert _is_indented_paragraph(
+        {"paragraphStyle": {"indentStart": {"magnitude": 36, "unit": "PT"}}}
+    )
+    assert _is_indented_paragraph(
+        {"paragraphStyle": {"indentStart": {"magnitude": 57, "unit": "PT"}}}
+    )
+
+
+def test_is_indented_paragraph_ignores_a_zero_or_absent_indent():
+    """Docs writes an indentStart with no magnitude on some paragraphs; that is not one."""
+    assert not _is_indented_paragraph({"paragraphStyle": {"indentStart": {"unit": "PT"}}})
+    assert not _is_indented_paragraph({"paragraphStyle": {}})
+    assert not _is_indented_paragraph({})
+
+
+def test_extract_blocks_marks_an_indented_paragraph():
+    doc = {"body": {"content": [
+        _check_para([_styled_run("Ordinary body text.\n")]),
+        {"paragraph": {
+            "elements": [_styled_run("The law of continuing change: ...\n")],
+            "paragraphStyle": {
+                "namedStyleType": "NORMAL_TEXT",
+                "indentStart": {"magnitude": 36, "unit": "PT"},
+            },
+        }},
+    ]}}
+    blocks = _extract_blocks(doc)
+    assert blocks[0]["indented"] is False
+    assert blocks[1]["indented"] is True
+
+
+def test_blocks_to_xhtml_keeps_the_authors_indentation():
+    """Before this, all 269 indented paragraphs in the book rendered as body text."""
+    xhtml = _blocks_to_xhtml("C", [
+        {"type": "paragraph", "text": "Plain.", "html": "Plain.", "indented": False},
+        {"type": "paragraph", "text": "Quoted.", "html": "Quoted.", "indented": True},
+    ])
+    assert "<p>Plain.</p>" in xhtml
+    assert '<p class="indented">Quoted.</p>' in xhtml
+
+
+def test_blocks_to_xhtml_does_not_call_an_indented_block_a_quotation():
+    """Most indented paragraphs are definition-list entries, not quotations."""
+    xhtml = _blocks_to_xhtml("C", [
+        {"type": "paragraph", "text": "Enabling team", "html": "Enabling team", "indented": True},
+    ])
+    assert "blockquote" not in xhtml

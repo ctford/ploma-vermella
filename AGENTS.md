@@ -165,6 +165,16 @@ it succeeds. **Still unguarded:** `append_content`, `clear_review_section` and
 `append_review_note`, which re-fetch between multiple writes; they only touch the PV review
 section, which is regenerated anyway.
 
+**Indented blocks used to flatten in the build.** The manuscript uses Docs' left indent for
+every block that sits in from the body text. Measured 2026-09-05: **269 indented paragraphs**
+across the 14 Manuscript documents, at 36pt everywhere except Ch 11's 57pt. `_extract_blocks`
+dropped the indent, so all of them reached readers as ordinary body text — the Brooks quotation
+in Ch 8 among them. They now carry an `indented` flag and render as `<p class="indented">`.
+**Deliberately not `<blockquote>`:** the large majority of those 269 are run-in definition-list
+entries, not quotations, so a quotation element would be right for a handful and wrong for
+roughly 260 — and would tell a screen reader that a definition list is a quote. Lehman's eight
+laws need nothing here; they are bulleted list items and were already indented as a list.
+
 **A command that changes nothing exits non-zero.** `edit` and friends still print their
 structured `{"status": "ambiguous", ...}` result — that shape is the point, and the `options`
 tell you what to re-anchor on — but the exit code is 1, so a batch driver cannot report a

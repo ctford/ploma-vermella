@@ -2696,6 +2696,29 @@ def _inline_object_ids(element: dict) -> list[str]:
     return ids
 
 
+def _is_indented_paragraph(paragraph: dict) -> bool:
+    """Whether a paragraph is set with a left indent in the Doc.
+
+    The manuscript uses Docs' left indent for every block that should sit in from the
+    body text: block quotations (Brooks in Ch 8, Lehman's eight laws) and — far more
+    often — the lead-in terms and definitions of its run-in definition lists. Measured
+    2026-09-05 across the 14 Manuscript documents: **269 indented paragraphs**, at 36pt
+    everywhere except Ch 11's 57pt, and the large majority are definition lists.
+
+    That count is why this returns a plain flag rather than mapping to `<blockquote>`.
+    Emitting a quotation element would be right for a handful of these and wrong for
+    roughly 260, and it would tell a screen reader that a definition list is a
+    quotation. The honest fix is to carry the author's indentation through to the
+    reader and let it look like what it looked like in the document.
+
+    Until this existed the build dropped the indent entirely, so all 269 reached
+    readers as ordinary body text — including the verbatim eight-laws block the editor
+    specifically asked for.
+    """
+    indent = paragraph.get("paragraphStyle", {}).get("indentStart") or {}
+    return bool(indent.get("magnitude"))
+
+
 def _extract_blocks(doc: dict) -> list[dict]:
     """
     Extract document blocks suitable for EPUB rendering.
@@ -2764,6 +2787,7 @@ def _extract_blocks(doc: dict) -> list[dict]:
             blocks.append({
                 "type": "paragraph", "text": text, "html": inline,
                 "code": _is_code_paragraph(element),
+                "indented": _is_indented_paragraph(paragraph),
             })
 
     return blocks
@@ -2968,6 +2992,8 @@ def _blocks_to_xhtml(title: str, blocks: list[dict], image_paths: dict | None = 
         elif block_type == "heading":
             level = max(1, min(6, int(block["level"])))
             parts.append(f"<h{level}>{_block_html(block)}</h{level}>")
+        elif block.get("indented"):
+            parts.append(f'<p class="indented">{_block_html(block)}</p>')
         else:
             parts.append(f"<p>{_block_html(block)}</p>")
 
@@ -4517,6 +4543,7 @@ def build_epub(
         "text-align: left; vertical-align: top; }\n"
         "th { background: #f0f0f0; font-family: sans-serif; }\n"
         "img { max-width: 100%; height: auto; }\n"
+        "p.indented { margin-left: 2em; margin-right: 1em; }\n"
         ".titlepage { text-align: center; margin-top: 20%; }\n"
         ".cover-titlepage { text-align: center; max-width: none; padding-top: 8%; }\n"
         "img.cover { max-width: 70%; max-height: 45vh; height: auto; "
