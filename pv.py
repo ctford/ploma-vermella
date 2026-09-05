@@ -2189,6 +2189,82 @@ def _span_text(raw: str) -> str:
     return raw
 
 
+# A caption's italics legitimately cover the whole line, and a caption that cites a
+# linked title arrives as several runs, so its tail — `(O'Reilly, 2020).` — looks
+# exactly like a spill. Match the caption paragraph and skip it.
+_CAPTION_PARA_RE = re.compile(r"^(?:Figure|Table|Example)\s+\d+-\d+\.")
+
+# A term-as-term italic is a short noun phrase. A run that spilled past one has a
+# shape no term ever has, and these three are that fingerprint: it opens on
+# punctuation, it crosses a sentence boundary, or it ends mid-clause on a comma.
+#
+# They are deliberately narrow rather than length-based. Measured across the 14
+# Manuscript documents on 2026-09-05: these flagged 3 runs and all 3 were real
+# damage — `(Pearson, 2004)` in Ch 2, `. Here` in Ch 4, and `Refactoring, as noted
+# earlier in this chapter,` in Ch 7. A "run is suspiciously long" rule flagged 17 and
+# buried those 3 under book titles (*Through the Looking-Glass, and What Alice Found
+# There*), run-in definition-list lead-ins, and sentence emphasis, all of which are
+# legitimately long. A noisy check gets ignored, so this one only reports shapes.
+_ITALIC_SPILL_STARTS = re.compile(r"^[.,;:()\[\]!?]")
+_ITALIC_SPILL_INTERNAL = re.compile(r"[.!?]\s+[A-Z]")
+_ITALIC_SPILL_ENDS = re.compile(r"[,;]$")
+
+
+def _italic_runs_in_context(doc: dict) -> list[tuple[str, str]]:
+    """Each italic run paired with the rendered text of the paragraph holding it.
+
+    `_italic_spans` merges adjacent runs and measures offsets, which is what the
+    term checks need. This keeps the paragraph instead, because the paragraph is
+    what distinguishes a spilled run from a caption whose italics cover the line.
+    """
+    runs: list[tuple[str, str]] = []
+    for element in doc.get("body", {}).get("content", []):
+        paragraph = element.get("paragraph")
+        if not paragraph:
+            continue
+        para_text = _text_from_elements(paragraph.get("elements", []))
+        if para_text == _REVIEW_HEADING:
+            break
+        current = ""
+        for pe in paragraph.get("elements", []):
+            run = pe.get("textRun")
+            if run is None:
+                continue
+            chunk = _render_para_elements([pe])
+            if run.get("textStyle", {}).get("italic"):
+                current += chunk
+            elif current:
+                runs.append((current, para_text))
+                current = ""
+        if current:
+            runs.append((current, para_text))
+    return runs
+
+
+def _italic_runs_past_term(runs: list[tuple[str, str]]) -> list[str]:
+    """Italic runs whose shape says the styling ran past the term into its definition.
+
+    Google Docs gives inserted text the character style of the character before it,
+    so an edit anchored at an italic term and running on into plain prose comes back
+    wholly italic — see `_dominant_char_style`, which stops `pv edit` causing this.
+    That fix does nothing for damage already in a document, and nothing else finds
+    it: a plain-text sweep cannot see styling at all, and the term checks ask whether
+    a term is italic, never where its italics stop.
+    """
+    flagged = []
+    for raw, paragraph in runs:
+        if _CAPTION_PARA_RE.match(paragraph.strip()):
+            continue
+        text = _span_text(raw).strip()
+        if not text:
+            continue
+        if (_ITALIC_SPILL_STARTS.match(text)
+                or _ITALIC_SPILL_INTERNAL.search(text)
+                or _ITALIC_SPILL_ENDS.search(text)):
+            flagged.append(text)
+    return flagged
+
+
 def _body_paragraphs(doc: dict) -> list[str]:
     """Running-prose paragraphs: no headings, no list items, no one-line fragments.
 
@@ -2424,6 +2500,13 @@ def _prose_structure_checks(
         "terms_italicized_more_than_once", "ok" if not repeated else "review",
         len(repeated), "0 — first use only; later uses are plain",
         sorted(set(repeated))[:20],
+    ))
+
+    spilled = _italic_runs_past_term(_italic_runs_in_context(doc))
+    checks.append(_check(
+        "italics_run_past_the_term", "ok" if not spilled else "review", len(spilled),
+        "0 — italics stop at the term; the definition after it is roman",
+        spilled[:10],
     ))
 
     jumps = []

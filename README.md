@@ -68,6 +68,8 @@ pv outline <doc-url> [--full]               # structural map: headings + images,
 pv words <doc-or-folder-url> [--exclude SUBSTRING ...]  # word count, per doc and total
 pv shade <doc-url> <start> <end> [--color HEX] [--all]  # shade a delimited block (e.g. a sidebar)
 pv prose-check <doc-url> [--terms PATH] [--chapter CH] [--phrases PATH]  # mechanical style sweep against the work's style guide
+                                            # includes italics_run_past_the_term: styling that spilled
+                                            # off a defined term onto the definition after it
 pv suggestions <doc-url>                    # list an editor's suggested edits as before→after deltas
                                             # (includes style-only suggestions: italics, links, bullets)
 pv replace-block <doc-url> <start> <end> ... # replace an inclusive body-element range safely

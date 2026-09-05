@@ -83,6 +83,8 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
                                                        # passives, tics, inclusive we, harness-role case, UK forms, -ly ordinals, paragraph length, first-use italics, stacked headings, figure refs.
                                                        # --chapter scopes the italics rule per-book: a term introduced in another
                                                        # chapter should be plain here, not italicized again
+                                                       # `italics_run_past_the_term` catches styling that spilled off a term into its
+                                                       # definition — the damage `pv edit` used to cause (see Italics Spill below)
 .venv/bin/pv suggestions <doc-url>                     # list an editor's suggested edits as per-paragraph before→after deltas
                                                        # reports text AND style-only suggestions; total_suggestion_count is
                                                        # distinct IDs (matches the Docs UI), not insertions + deletions
@@ -135,6 +137,20 @@ chapters renders in the body font, and `prose-check` counts its indentation as d
 Pass `--code`, which sets the insertion in whatever monospace family the document already uses.
 Check the block is still valid after a move, too: splitting code into paragraphs can leave stray
 leading indent on brace lines.
+
+**Italics spill off a term onto its definition, and no plain-text check can see it.**
+Google Docs gives inserted text the character style of the character before it, so an edit
+anchored at an italic term and running on into plain prose — `*Transferable*, in the sense
+that…` — comes back wholly italic. `pv edit` stopped causing this on 2026-09-04, but that
+does nothing for damage already in a document: a text sweep cannot see styling at all, and
+the term checks ask whether a term *is* italic, never where its italics **stop**.
+`prose-check`'s `italics_run_past_the_term` closes that gap. It reports three shapes a
+term-as-term italic never has — the run opens on punctuation, crosses a sentence boundary,
+or ends mid-clause on a comma — and deliberately does **not** gate on length, because book
+titles, run-in definition-list lead-ins and sentence emphasis are all legitimately long.
+Measured across the 14 Manuscript documents on 2026-09-05: 3 flags out of 604 italic runs,
+all three real (`(Pearson, 2004)` in Ch 2, `. Here` in Ch 4, `Refactoring, as noted earlier
+in this chapter,` in Ch 7); a length rule flagged 17 and buried them.
 
 **A command that changes nothing exits non-zero.** `edit` and friends still print their
 structured `{"status": "ambiguous", ...}` result — that shape is the point, and the `options`

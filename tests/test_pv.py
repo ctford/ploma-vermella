@@ -51,6 +51,8 @@ from pv import (
     _is_code_paragraph,
     _is_image_paragraph,
     _is_table_separator,
+    _italic_runs_in_context,
+    _italic_runs_past_term,
     _italic_spans,
     _link_plan,
     _map_comments,
@@ -2254,6 +2256,61 @@ def test_terms_italics_scope_flags_a_borrowed_term_set_in_italics():
         text, [(2, "setpoint")], [("setpoint", "06")], chapter="07",
     )
     assert away == ["setpoint"]
+
+
+def test_italic_runs_in_context_pairs_each_run_with_its_paragraph():
+    doc = {"body": {"content": [_check_para([
+        _styled_run("A "),
+        _styled_run("setpoint", italic=True),
+        _styled_run(" is a target, and a "),
+        _styled_run("Guard", italic=True),
+        _styled_run(" is normative.\n"),
+    ])]}}
+    para = "A setpoint is a target, and a Guard is normative."
+    assert _italic_runs_in_context(doc) == [("setpoint", para), ("Guard", para)]
+
+
+def test_italic_runs_past_term_flags_the_three_spill_shapes():
+    """The shapes a term-as-term italic never has. Each was real damage."""
+    runs = [
+        # Opens on punctuation: the tail of a citation left italic after the title.
+        ("(Pearson, 2004)", "Michael Feathers's Working Effectively with Legacy Code"
+                            " (Pearson, 2004): characterization tests."),
+        # Crosses a sentence boundary: an edit replaced "; here" and inherited italics.
+        (". Here", "A concept known as spec-as-source. Here, the spec is persistent."),
+        # Ends mid-clause on a comma: italics ran from the term into its definition.
+        ("Refactoring, as noted earlier in this chapter,",
+         "Refactoring, as noted earlier in this chapter, means reorganizing a"
+         " component to preserve its observable behavior."),
+    ]
+    assert _italic_runs_past_term(runs) == [
+        "(Pearson, 2004)",
+        ". Here",
+        "Refactoring, as noted earlier in this chapter,",
+    ]
+
+
+def test_italic_runs_past_term_leaves_legitimate_long_italics_alone():
+    """Book titles, definition-list lead-ins and emphasis are legitimately long."""
+    runs = [
+        ("Through the Looking-Glass, and What Alice Found There",
+         "The Red Queen, in Lewis Carroll's Through the Looking-Glass, and What"
+         " Alice Found There (Macmillan, 1871), observes:"),
+        ("Mean time to restore (renamed in DORA's 2023 report)",
+         "Mean time to restore (renamed in DORA's 2023 report)"),
+        ("if you have a quality problem, fix the harness, not the output",
+         "The rule is that if you have a quality problem, fix the harness, not the"
+         " output, because the harness is what repeats."),
+    ]
+    assert _italic_runs_past_term(runs) == []
+
+
+def test_italic_runs_past_term_skips_a_caption_split_by_a_linked_title():
+    """A caption is italic end to end, and a linked title splits it into runs."""
+    caption = ("Figure 1-6. An organization is like a tall building. Illustration"
+               " from Gregor Hohpe's The Software Architect Elevator"
+               " (O'Reilly, 2020).")
+    assert _italic_runs_past_term([("(O'Reilly, 2020).", caption)]) == []
 
 
 def test_dominant_char_style_returns_nothing_for_a_uniform_span():
