@@ -2977,14 +2977,17 @@ def _title_page_xhtml(title: str, subtitle: str | None = None, author: str | Non
 def _cover_title_page_xhtml(
     title: str, image_href: str, subtitle: str | None = None, author: str | None = None,
 ) -> str:
-    """Render a single front page combining the cover image with title/subtitle/author."""
+    """Render a single front page combining the cover image with title/subtitle/author.
+
+    Order is title, subtitle, image, author — the arrangement of a printed jacket, and
+    what the author asked for on 2026-09-05. The image sits between the two blocks of
+    type rather than above both, so the title reads first at thumbnail size.
+    """
     src = html.escape(image_href, quote=True)
-    parts = [
-        f'<img class="cover" src="{src}" alt="Cover"/>',
-        f'<h1 class="title">{html.escape(title)}</h1>',
-    ]
+    parts = [f'<h1 class="title">{html.escape(title)}</h1>']
     if subtitle:
         parts.append(f'<p class="subtitle">{html.escape(subtitle)}</p>')
+    parts.append(f'<img class="cover" src="{src}" alt="Cover"/>')
     if author:
         parts.append(f'<p class="author">{html.escape(author)}</p>')
     body = "\n    ".join(parts)
@@ -4498,11 +4501,11 @@ def build_epub(
         "img { max-width: 100%; height: auto; }\n"
         ".titlepage { text-align: center; margin-top: 20%; }\n"
         ".cover-titlepage { text-align: center; max-width: none; padding-top: 8%; }\n"
-        "img.cover { max-width: 70%; max-height: 55vh; height: auto; "
-        "margin: 0 auto 1.5em; display: block; }\n"
-        "h1.title { font-size: 2.2em; margin: 0.4em 0 0.2em; }\n"
-        "p.subtitle { font-size: 1.2em; font-style: italic; margin: 0 0 1em; }\n"
-        "p.author { margin-top: 1.5em; font-size: 1.1em; }\n"
+        "img.cover { max-width: 70%; max-height: 45vh; height: auto; "
+        "margin: 1.2em auto; display: block; }\n"
+        "h1.title { font-size: 2.2em; margin: 0 0 0.2em; }\n"
+        "p.subtitle { font-size: 1.2em; font-style: italic; margin: 0 0 0.6em; }\n"
+        "p.author { margin-top: 1.2em; font-size: 1.1em; }\n"
         ".toc-page ol { list-style: none; padding: 0; }\n"
         ".toc-page li { margin: 0.5em 0; font-size: 1.1em; }\n"
         ".toc-page li.toc-part { font-weight: bold; margin-top: 1.2em; "

@@ -922,6 +922,24 @@ def test_cover_title_page_xhtml_combines_image_and_title():
     assert '<p class="subtitle">A Subtitle</p>' in xhtml
     assert '<p class="author">Chris Ford</p>' in xhtml
 
+
+def test_cover_title_page_puts_title_above_the_image_and_author_below():
+    """A printed jacket's order, and what the author asked for: title, image, byline."""
+    xhtml = _cover_title_page_xhtml("My Book", "images/cover.jpg", "A Subtitle", "Chris Ford")
+    title_at = xhtml.index('<h1 class="title">')
+    subtitle_at = xhtml.index('<p class="subtitle">')
+    image_at = xhtml.index('<img class="cover"')
+    author_at = xhtml.index('<p class="author">')
+    assert title_at < subtitle_at < image_at < author_at
+
+
+def test_cover_title_page_keeps_the_image_above_the_author_without_a_subtitle():
+    xhtml = _cover_title_page_xhtml("My Book", "images/cover.jpg", None, "Chris Ford")
+    assert "subtitle" not in xhtml
+    assert xhtml.index('<h1 class="title">') < xhtml.index('<img class="cover"')
+    assert xhtml.index('<img class="cover"') < xhtml.index('<p class="author">')
+
+
 def test_toc_page_xhtml_lists_chapter_links():
     xhtml = _toc_page_xhtml([{"filename": "chapter-01.xhtml", "title": "Ch1"}])
     assert '<a href="chapter-01.xhtml">Ch1</a>' in xhtml
