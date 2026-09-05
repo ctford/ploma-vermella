@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from googleapiclient.errors import HttpError
 from PIL import Image
 
 import pv
@@ -2795,3 +2796,66 @@ def test_build_parser_prose_check():
     assert args.doc == "DOC"
     assert args.terms == "t.txt"
     assert args.chapter == "07"
+
+
+def _fake_docs_service(captured, raise_error=None):
+    """A Docs service stub that records the batchUpdate body it was handed."""
+    class FakeDocuments:
+        def batchUpdate(self, documentId, body):
+            captured["documentId"] = documentId
+            captured["body"] = body
+            return self
+
+        def execute(self):
+            if raise_error is not None:
+                raise raise_error
+            return {}
+
+    class FakeService:
+        def documents(self):
+            return FakeDocuments()
+
+    return FakeService()
+
+
+def test_guarded_batch_update_sends_the_documents_revision_id():
+    """A write must be pinned to the revision its indices were computed against."""
+    captured = {}
+    doc = {"revisionId": "rev-42"}
+    pv._guarded_batch_update(_fake_docs_service(captured), "doc1", [{"x": 1}], doc)
+    assert captured["body"]["writeControl"] == {"requiredRevisionId": "rev-42"}
+    assert captured["body"]["requests"] == [{"x": 1}]
+
+
+def test_guarded_batch_update_omits_write_control_when_there_is_no_revision():
+    """Fixtures and stubs without a revisionId must still be writable."""
+    captured = {}
+    pv._guarded_batch_update(_fake_docs_service(captured), "doc1", [{"x": 1}], {})
+    assert "writeControl" not in captured["body"]
+
+
+def test_guarded_batch_update_turns_a_stale_revision_into_document_changed():
+    """The whole point: a race fails loudly instead of writing to shifted indices."""
+    class Resp:
+        status = 400
+        reason = "Bad Request"
+
+    err = HttpError(Resp(), b'{"error": {"message": "Invalid requiredRevisionId"}}')
+    with pytest.raises(pv.DocumentChanged) as excinfo:
+        pv._guarded_batch_update(
+            _fake_docs_service({}, raise_error=err), "doc1", [{"x": 1}], {"revisionId": "old"},
+        )
+    assert "Nothing was modified" in str(excinfo.value)
+
+
+def test_guarded_batch_update_reraises_unrelated_http_errors():
+    """A permission or quota failure must not be reported as a concurrent edit."""
+    class Resp:
+        status = 403
+        reason = "Forbidden"
+
+    err = HttpError(Resp(), b'{"error": {"message": "insufficient permissions"}}')
+    with pytest.raises(HttpError):
+        pv._guarded_batch_update(
+            _fake_docs_service({}, raise_error=err), "doc1", [{"x": 1}], {"revisionId": "old"},
+        )

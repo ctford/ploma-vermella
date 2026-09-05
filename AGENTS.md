@@ -152,6 +152,19 @@ Measured across the 14 Manuscript documents on 2026-09-05: 3 flags out of 604 it
 all three real (`(Pearson, 2004)` in Ch 2, `. Here` in Ch 4, `Refactoring, as noted earlier
 in this chapter,` in Ch 7); a length rule flagged 17 and buried them.
 
+**Editing a doc the author has open used to corrupt it silently; now it fails loudly.**
+Every index-based command fetches the document, computes indices from that snapshot, then
+writes. If anyone edits in between — the author typing in Google Docs while you work is the
+normal case — those indices point at different characters and the write lands in the wrong
+place. Measured 2026-09-05 on Chapter 11: an edit landed six characters late, leaving
+`MachinMachine-learning` at the front of the replacement and eating `Disco` from the
+`Discovering` that followed, while `pv edit` reported `{"status": "edited",
+"occurrences_replaced": 1}` and exit 0. Fourteen commands now pin their write to the
+document's `revisionId`, so a race raises `DocumentChanged` and writes nothing — re-run and
+it succeeds. **Still unguarded:** `append_content`, `clear_review_section` and
+`append_review_note`, which re-fetch between multiple writes; they only touch the PV review
+section, which is regenerated anyway.
+
 **A command that changes nothing exits non-zero.** `edit` and friends still print their
 structured `{"status": "ambiguous", ...}` result — that shape is the point, and the `options`
 tell you what to re-anchor on — but the exit code is 1, so a batch driver cannot report a

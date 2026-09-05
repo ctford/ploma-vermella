@@ -19,6 +19,7 @@ from google.auth.transport.requests import AuthorizedSession, Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
 
 SCOPES = [
@@ -84,6 +85,49 @@ def _get_credentials() -> Credentials:
 
 def _docs_service():
     return build("docs", "v1", credentials=_get_credentials())
+
+
+class DocumentChanged(RuntimeError):
+    """The document was edited between reading it and writing to it."""
+
+
+def _guarded_batch_update(service, doc_id: str, requests: list, doc: dict) -> None:
+    """Apply `requests`, refusing to write if `doc` is no longer the current revision.
+
+    Every command that edits by index does the same three things: fetch the document,
+    work out indices from that snapshot, then write. If anyone touches the document in
+    between — the author typing in Google Docs is the normal case, not an exotic one —
+    those indices now point at different characters and the write lands in the wrong
+    place. It does not fail. It corrupts.
+
+    Measured 2026-09-05 on Chapter 11: an edit computed against a stale snapshot landed
+    six characters late, leaving `MachinMachine-learning` at the front of the replacement
+    and eating `Disco` from the `Discovering` that followed. `pv edit` reported
+    `{"status": "edited", "occurrences_replaced": 1}` and exit 0.
+
+    `requiredRevisionId` makes the API reject that write instead, so a race is a loud
+    failure the caller can retry rather than damage nobody notices.
+    """
+    body = {"requests": requests}
+    revision = doc.get("revisionId")
+    if revision:
+        body["writeControl"] = {"requiredRevisionId": revision}
+    try:
+        service.documents().batchUpdate(documentId=doc_id, body=body).execute()
+    except HttpError as exc:
+        if revision and exc.resp.status in (400, 409) and _is_revision_conflict(exc):
+            raise DocumentChanged(
+                "The document changed while pv was preparing this edit, so pv refused to "
+                "write — the indices it computed no longer point at the same text. "
+                "Nothing was modified. Re-run the command."
+            ) from exc
+        raise
+
+
+def _is_revision_conflict(exc: "HttpError") -> bool:
+    """Whether an HttpError is the API rejecting a stale `requiredRevisionId`."""
+    detail = str(getattr(exc, "content", b"") or "") + str(exc)
+    return "revision" in detail.lower()
 
 
 def _drive_service():
@@ -842,12 +886,12 @@ def insert_table(
     if plan["kind"] == "ambiguous":
         return plan["result"]
 
-    service.documents().batchUpdate(documentId=doc_id, body={"requests": [
+    _guarded_batch_update(service, doc_id, [
         {"insertTable": {
             "rows": plan["rows"], "columns": plan["columns"],
             "location": {"index": plan["index"]},
         }}
-    ]}).execute()
+    ], doc)
 
     doc = service.documents().get(documentId=doc_id).execute()
     table_el = None
@@ -871,9 +915,7 @@ def insert_table(
                 "textStyle": {"bold": True}, "fields": "bold",
             }})
     if requests:
-        service.documents().batchUpdate(
-            documentId=doc_id, body={"requests": requests},
-        ).execute()
+        _guarded_batch_update(service, doc_id, requests, doc)
     return {
         "status": "inserted", "rows": plan["rows"], "columns": plan["columns"],
         "body_index": plan["body_index"], "anchor": anchor,
@@ -3465,13 +3507,13 @@ def replace_image(
     if plan["kind"] == "ambiguous":
         return plan["result"]
     uri = presentation_thumbnail(deck, slide_id, size)["content_url"]
-    service.documents().batchUpdate(documentId=doc_id, body={"requests": [
+    _guarded_batch_update(service, doc_id, [
         {"replaceImage": {
             "imageObjectId": plan["object_id"],
             "uri": uri,
             "imageReplaceMethod": "CENTER_CROP",
         }}
-    ]}).execute()
+    ], doc)
     return {
         "status": "replaced",
         "object_id": plan["object_id"],
@@ -3503,7 +3545,7 @@ def place_figure(
     insert_index = sel["element"]["endIndex"] - 1
     uri = presentation_thumbnail(deck, slide_id, size)["content_url"]
     requests = _place_figure_requests(insert_index, uri, caption, width_pt, height_pt)
-    service.documents().batchUpdate(documentId=doc_id, body={"requests": requests}).execute()
+    _guarded_batch_update(service, doc_id, requests, doc)
     return {
         "status": "placed",
         "after_body_index": sel["body_index"],
@@ -3543,7 +3585,7 @@ def replace_section(doc_id_or_url: str, heading_anchor: str, text: str) -> dict:
         "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
         "fields": "namedStyleType",
     }})
-    service.documents().batchUpdate(documentId=doc_id, body={"requests": requests}).execute()
+    _guarded_batch_update(service, doc_id, requests, doc)
     return {
         "status": "replaced",
         "heading_body_index": plan["heading_body_index"],
@@ -3624,10 +3666,7 @@ def replace_body_range(
     doc_id = _extract_doc_id(doc_id_or_url)
     doc = _docs_service().documents().get(documentId=doc_id).execute()
     plan = _replace_body_range_plan(doc, start_body_index, end_body_index, text)
-    _docs_service().documents().batchUpdate(
-        documentId=doc_id,
-        body={"requests": plan["requests"]},
-    ).execute()
+    _guarded_batch_update(_docs_service(), doc_id, plan["requests"], doc)
     return {
         "status": "replaced",
         "start_body_index": start_body_index,
@@ -3650,19 +3689,16 @@ def insert_image_at_body_index(
     if body_index < 0 or body_index >= len(content):
         raise ValueError(f"body index {body_index} out of range")
     location = content[body_index].get("startIndex")
-    _docs_service().documents().batchUpdate(
-        documentId=doc_id,
-        body={"requests": [{
-            "insertInlineImage": {
-                "location": {"index": location},
-                "uri": image_url,
-                "objectSize": {
-                    "width": {"magnitude": width_pt, "unit": "PT"},
-                    "height": {"magnitude": height_pt, "unit": "PT"},
-                },
-            }
-        }]},
-    ).execute()
+    _guarded_batch_update(_docs_service(), doc_id, [{
+        "insertInlineImage": {
+            "location": {"index": location},
+            "uri": image_url,
+            "objectSize": {
+                "width": {"magnitude": width_pt, "unit": "PT"},
+                "height": {"magnitude": height_pt, "unit": "PT"},
+            },
+        }
+    }], doc)
     return {
         "status": "inserted_image",
         "body_index": body_index,
@@ -3973,7 +4009,7 @@ def edit_document(
                     "fields": ",".join(sorted(dominant)),
                 }})
 
-    service.documents().batchUpdate(documentId=doc_id, body={"requests": requests}).execute()
+    _guarded_batch_update(service, doc_id, requests, doc)
     return {"status": "edited", "occurrences_replaced": len(positions), "old": old, "new": new}
 
 
@@ -4018,9 +4054,7 @@ def shade(
     if plan["kind"] != "ok":
         return plan
     if plan["requests"]:
-        _docs_service().documents().batchUpdate(
-            documentId=doc_id, body={"requests": plan["requests"]},
-        ).execute()
+        _guarded_batch_update(_docs_service(), doc_id, plan["requests"], doc)
     return {
         "status": "unshaded" if remove else "shaded",
         "blocks": plan["count"], "ranges": plan["ranges"],
@@ -4127,9 +4161,7 @@ def table_update(
     )
     if plan["kind"] == "ambiguous":
         return plan["result"]
-    service.documents().batchUpdate(
-        documentId=doc_id, body={"requests": plan["requests"]}
-    ).execute()
+    _guarded_batch_update(service, doc_id, plan["requests"], doc)
     return {
         "status": "updated",
         "body_index": plan["body_index"],
@@ -4163,9 +4195,7 @@ def insert_after(
     )
     if plan["kind"] == "ambiguous":
         return plan["result"]
-    service.documents().batchUpdate(
-        documentId=doc_id, body={"requests": plan["requests"]}
-    ).execute()
+    _guarded_batch_update(service, doc_id, plan["requests"], doc)
     result = {
         "status": "inserted",
         "after_body_index": plan["body_index"],
@@ -4202,9 +4232,7 @@ def insert_before(
     )
     if plan["kind"] == "ambiguous":
         return plan["result"]
-    service.documents().batchUpdate(
-        documentId=doc_id, body={"requests": plan["requests"]}
-    ).execute()
+    _guarded_batch_update(service, doc_id, plan["requests"], doc)
     result = {
         "status": "inserted",
         "before_body_index": plan["body_index"],
@@ -4235,9 +4263,7 @@ def link_text(
     )
     if plan["kind"] == "ambiguous":
         return plan["result"]
-    service.documents().batchUpdate(
-        documentId=doc_id, body={"requests": plan["requests"]}
-    ).execute()
+    _guarded_batch_update(service, doc_id, plan["requests"], doc)
     return {
         "status": "linked",
         "text": text,
@@ -4264,9 +4290,7 @@ def cite_text(
     )
     if plan["kind"] == "ambiguous":
         return plan["result"]
-    service.documents().batchUpdate(
-        documentId=doc_id, body={"requests": plan["requests"]}
-    ).execute()
+    _guarded_batch_update(service, doc_id, plan["requests"], doc)
     return {
         "status": "cited", "title": title, "url": url,
         "occurrences": len(plan["spans"]), "spans": plan["spans"],
@@ -4292,9 +4316,7 @@ def set_heading(
     )
     if plan["kind"] == "ambiguous":
         return plan["result"]
-    service.documents().batchUpdate(
-        documentId=doc_id, body={"requests": [plan["request"]]}
-    ).execute()
+    _guarded_batch_update(service, doc_id, [plan["request"]], doc)
     return {
         "status": "styled", "anchor": anchor,
         "named_style": named_style, "body_index": plan["body_index"],
@@ -4322,9 +4344,7 @@ def set_bullets(
     )
     if plan["kind"] == "ambiguous":
         return plan["result"]
-    service.documents().batchUpdate(
-        documentId=doc_id, body={"requests": [plan["request"]]}
-    ).execute()
+    _guarded_batch_update(service, doc_id, [plan["request"]], doc)
     return {
         "status": "unbulleted" if remove else "bulleted", "preset": plan["preset"],
         "start_body_index": plan["start_body_index"],
@@ -4363,9 +4383,7 @@ def style_text(
     )
     if plan["kind"] == "ambiguous":
         return plan["result"]
-    service.documents().batchUpdate(
-        documentId=doc_id, body={"requests": plan["requests"]}
-    ).execute()
+    _guarded_batch_update(service, doc_id, plan["requests"], doc)
     result = {
         "status": "styled",
         "text": text,
