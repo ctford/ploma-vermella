@@ -69,6 +69,8 @@ from pv import (
     _parse_part_spec,
     _parse_table_row,
     _parse_terms,
+    _part_page_xhtml,
+    _part_pages,
     _place_figure_requests,
     _plan_edit_matches,
     _preceding_image_id,
@@ -2910,3 +2912,54 @@ def test_blocks_to_xhtml_does_not_call_an_indented_block_a_quotation():
         {"type": "paragraph", "text": "Enabling team", "html": "Enabling team", "indented": True},
     ])
     assert "blockquote" not in xhtml
+
+
+def test_assign_parts_ends_a_run_on_an_empty_title():
+    """Back matter must not be swallowed by the last Part."""
+    ids = ["pre", "c1", "c2", "c3", "c4", "concl", "acks"]
+    parts = _assign_parts(ids, [("Part I", "c1"), ("Part II", "c3"),
+                                ("Conclusion", "concl"), ("", "acks")])
+    assert parts == [None, "Part I", "Part I", "Part II", "Part II", "Conclusion", None]
+
+
+def test_part_pages_one_per_part_anchored_to_its_first_chapter():
+    chapters = [
+        {"filename": "chapter-01.xhtml", "title": "Preface", "part": None},
+        {"filename": "chapter-02.xhtml", "title": "Ch1", "part": "Part I"},
+        {"filename": "chapter-03.xhtml", "title": "Ch2", "part": "Part I"},
+        {"filename": "chapter-04.xhtml", "title": "Ch3", "part": "Part II"},
+        {"filename": "chapter-05.xhtml", "title": "Acks", "part": None},
+    ]
+    pages = _part_pages(chapters)
+    assert [(p["title"], p["before"]) for p in pages] == [
+        ("Part I", "chapter-02.xhtml"),
+        ("Part II", "chapter-04.xhtml"),
+    ]
+    assert [p["href"] for p in pages] == ["part-01.xhtml", "part-02.xhtml"]
+
+
+def test_part_page_xhtml_renders_the_title():
+    xhtml = _part_page_xhtml("Part IV: Economic Engineering")
+    assert '<h1 class="part-title">Part IV: Economic Engineering</h1>' in xhtml
+    assert 'epub:type="part"' in xhtml
+
+
+def test_toc_entries_links_the_part_heading_when_it_has_a_page():
+    chapters = [{"filename": "chapter-02.xhtml", "title": "Ch1", "part": "Part I"}]
+    plain = _toc_entries_html(chapters)
+    linked = _toc_entries_html(chapters, part_hrefs={"Part I": "part-01.xhtml"})
+    assert '<li class="toc-part">Part I' in plain
+    assert '<li class="toc-part"><a href="part-01.xhtml">Part I</a>' in linked
+
+
+def test_epub_package_splices_each_part_page_before_its_chapter():
+    chapters = [
+        {"filename": "chapter-01.xhtml", "title": "Preface"},
+        {"filename": "chapter-02.xhtml", "title": "Ch1"},
+    ]
+    pages = [{"id": "part1", "href": "part-01.xhtml", "title": "Part I",
+              "before": "chapter-02.xhtml"}]
+    opf = _epub_package("B", "id", chapters, part_pages=pages)
+    spine = opf[opf.index("<spine"):]
+    assert spine.index('idref="part1"') < spine.index('idref="chap2"')
+    assert spine.index('idref="chap1"') < spine.index('idref="part1"')

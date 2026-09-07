@@ -2817,16 +2817,64 @@ def _assign_parts(doc_ids: list[str], part_specs: list[tuple[str, str]]) -> list
 
     part_specs is [(title, start_doc_id), ...]; a Part's chapters run from its start
     doc (inclusive) until the next Part's start doc. Docs before the first Part's
-    start doc (front matter — Preface, Acknowledgements, ...) get None.
+    start doc (front matter — Preface, ...) get None.
+
+    **An empty title ends the run.** Without it the last Part swallows the back matter:
+    the Acknowledgements sits after Chapter 12 and would be listed inside "Part IV:
+    Economic Engineering", which is where it landed the first time this was used. Pass
+    `--part "=<acknowledgements-doc>"` to return to no-part for the rest of the book.
     """
     starts = {doc_id: title for title, doc_id in part_specs}
     current = None
     result = []
     for doc_id in doc_ids:
         if doc_id in starts:
-            current = starts[doc_id]
+            current = starts[doc_id] or None
         result.append(current)
     return result
+
+
+def _part_page_xhtml(part_title: str) -> str:
+    """Render a Part separator page — the half-title that opens a Part in a printed book."""
+    safe = html.escape(part_title)
+    return (
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+        "<html xmlns=\"http://www.w3.org/1999/xhtml\" "
+        f"xmlns:epub=\"{_EPUB_NS}\">\n"
+        "<head>\n"
+        f"  <title>{safe}</title>\n"
+        "  <link rel=\"stylesheet\" type=\"text/css\" href=\"styles.css\"/>\n"
+        "</head>\n"
+        "<body>\n"
+        "  <section epub:type=\"part\" class=\"part-page\">\n"
+        f"    <h1 class=\"part-title\">{safe}</h1>\n"
+        "  </section>\n"
+        "</body>\n"
+        "</html>\n"
+    )
+
+
+def _part_pages(chapters: list[dict]) -> list[dict]:
+    """One separator page per Part, as [{id, href, title, before}] in reading order.
+
+    `before` is the filename of the first chapter in the Part, which is where the page
+    is spliced into the spine. A Part with no chapters cannot occur: the run is derived
+    from the chapters themselves.
+    """
+    pages = []
+    seen = None
+    for chapter in chapters:
+        part = chapter.get("part")
+        if part and part != seen:
+            n = len(pages) + 1
+            pages.append({
+                "id": f"part{n}",
+                "href": f"part-{n:02d}.xhtml",
+                "title": part,
+                "before": chapter["filename"],
+            })
+        seen = part
+    return pages
 
 
 _MEDIA_EXTENSIONS = {
@@ -3075,13 +3123,20 @@ def _cover_title_page_xhtml(
     )
 
 
-def _toc_entries_html(chapters: list[dict], indent: str = "    ") -> str:
+def _toc_entries_html(
+    chapters: list[dict], indent: str = "    ", part_hrefs: dict | None = None,
+) -> str:
     """Render nested <li> entries for a TOC <ol>, grouping chapters under a Part.
 
     Front-matter chapters carrying no "part" (Preface, Acknowledgements, ...) render
     as flat top-level entries. A run of consecutive chapters sharing the same "part"
     title nests under one <li> for that part.
+
+    `part_hrefs` maps a Part title to its separator page, which makes the Part heading
+    a link rather than a dead label — without it a reader can see Part IV in the
+    contents and have no way to reach its opening page.
     """
+    part_hrefs = part_hrefs or {}
     lines = []
     i = 0
     while i < len(chapters):
@@ -3096,7 +3151,10 @@ def _toc_entries_html(chapters: list[dict], indent: str = "    ") -> str:
         while i < len(chapters) and chapters[i].get("part") == part:
             run.append(chapters[i])
             i += 1
-        lines.append(f'{indent}<li class="toc-part">{html.escape(part)}')
+        label = html.escape(part)
+        if part in part_hrefs:
+            label = f'<a href="{html.escape(part_hrefs[part])}">{label}</a>'
+        lines.append(f'{indent}<li class="toc-part">{label}')
         lines.append(f"{indent}  <ol>")
         for ch in run:
             href = html.escape(ch["filename"])
@@ -3107,9 +3165,9 @@ def _toc_entries_html(chapters: list[dict], indent: str = "    ") -> str:
     return "\n".join(lines)
 
 
-def _toc_page_xhtml(chapters: list[dict]) -> str:
+def _toc_page_xhtml(chapters: list[dict], part_hrefs: dict | None = None) -> str:
     """Render a visible Table of Contents page, chapters grouped under their Part."""
-    items = _toc_entries_html(chapters, indent="      ")
+    items = _toc_entries_html(chapters, indent="      ", part_hrefs=part_hrefs)
     return (
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
         "<html xmlns=\"http://www.w3.org/1999/xhtml\" "
@@ -3139,9 +3197,9 @@ def _read_cover_image(cover: str) -> tuple[bytes, str]:
     return path.read_bytes(), (mimetypes.guess_type(path.name)[0] or "image/jpeg")
 
 
-def _epub_nav(book_title: str, chapters: list[dict]) -> str:
+def _epub_nav(book_title: str, chapters: list[dict], part_hrefs: dict | None = None) -> str:
     """Return the EPUB navigation document."""
-    items = _toc_entries_html(chapters, indent="      ")
+    items = _toc_entries_html(chapters, indent="      ", part_hrefs=part_hrefs)
     safe_title = html.escape(book_title)
     return (
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
@@ -3170,12 +3228,14 @@ def _epub_package(
     author: str | None = None,
     front_matter: list[dict] | None = None,
     cover_image_id: str | None = None,
+    part_pages: list[dict] | None = None,
 ) -> str:
     """Return the OPF package document.
 
     front_matter is a list of {id, href} XHTML docs (cover/title pages) placed
     ahead of the chapters in the spine. cover_image_id names the media item to
-    flag as the EPUB cover image.
+    flag as the EPUB cover image. part_pages are separator pages, each spliced in
+    immediately before the chapter named by its "before" filename.
     """
     manifest_items = [
         '<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>',
@@ -3194,7 +3254,15 @@ def _epub_package(
             f'<item id="{page["id"]}" href="{page["href"]}" media-type="application/xhtml+xml"/>'
         )
         spine_items.append(f'<itemref idref="{page["id"]}"/>')
+    pages_before = {page["before"]: page for page in part_pages or []}
     for i, chapter in enumerate(chapters, start=1):
+        page = pages_before.get(chapter["filename"])
+        if page:
+            manifest_items.append(
+                f'<item id="{page["id"]}" href="{page["href"]}" '
+                'media-type="application/xhtml+xml"/>'
+            )
+            spine_items.append(f'<itemref idref="{page["id"]}"/>')
         manifest_items.append(
             f'<item id="chap{i}" href="{chapter["filename"]}" media-type="application/xhtml+xml"/>'
         )
@@ -4523,13 +4591,19 @@ def build_epub(
         title_xhtml = _title_page_xhtml(book_title, subtitle, author)
     front_matter.append({"id": "titlepage", "href": "title.xhtml"})
     front_files.append(("title.xhtml", title_xhtml))
-    front_matter.append({"id": "toc-page", "href": "toc.xhtml"})
-    front_files.append(("toc.xhtml", _toc_page_xhtml(chapters)))
+    part_pages = _part_pages(chapters)
+    part_hrefs = {page["title"]: page["href"] for page in part_pages}
+    for page in part_pages:
+        front_files.append((page["href"], _part_page_xhtml(page["title"])))
 
-    nav = _epub_nav(book_title, chapters)
+    front_matter.append({"id": "toc-page", "href": "toc.xhtml"})
+    front_files.append(("toc.xhtml", _toc_page_xhtml(chapters, part_hrefs)))
+
+    nav = _epub_nav(book_title, chapters, part_hrefs)
     package = _epub_package(
         book_title, book_id, chapters, media_items,
         author=author, front_matter=front_matter, cover_image_id=cover_image_id,
+        part_pages=part_pages,
     )
     stylesheet = (
         "body { font-family: serif; line-height: 1.4; }\n"
@@ -4544,6 +4618,9 @@ def build_epub(
         "th { background: #f0f0f0; font-family: sans-serif; }\n"
         "img { max-width: 100%; height: auto; }\n"
         "p.indented { margin-left: 2em; margin-right: 1em; }\n"
+        ".part-page { text-align: center; padding-top: 30%; }\n"
+        "h1.part-title { font-size: 2em; font-weight: normal; "
+        "letter-spacing: 0.04em; }\n"
         ".titlepage { text-align: center; margin-top: 20%; }\n"
         ".cover-titlepage { text-align: center; max-width: none; padding-top: 8%; }\n"
         "img.cover { max-width: 70%; max-height: 45vh; height: auto; "
