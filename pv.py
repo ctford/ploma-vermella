@@ -1821,9 +1821,48 @@ _NESTED_ASIDE_WORDS_PER = 1200
 # only 0.1, so a handful of added passives will trip it.
 _PASSIVE_SENTENCE_PCT = 10.0
 
-_PASSIVE_RE = re.compile(
-    r"\b(?:is|are|was|were|be|been|being)\s+(?:\w+ly\s+)?\w+(?:ed|en)\b", re.I
+# The adverb slot has to cover more than `-ly`, or an adverb between the auxiliary
+# and the participle hides the participle behind it. "is often used" is the common
+# case in this manuscript: the regex matched `is often`, took "often" for the
+# participle, and never looked at "used". Filtering "often" as a non-participle then
+# dropped a real passive rather than a false one — caught by a test, not by reading.
+_PASSIVE_ADVERBS = (
+    r"\w+ly|often|never|always|still|also|now|already|then|again|even|"
+    r"sometimes|usually|typically|generally|rarely|only|just|thereby"
 )
+_PASSIVE_RE = re.compile(
+    rf"\b(?:is|are|was|were|be|been|being)\s+(?:(?:{_PASSIVE_ADVERBS})\s+)?"
+    r"(?P<participle>\w+(?:ed|en))\b", re.I
+)
+
+# Words that merely END in -ed or -en and are never participles, so `be` + one of
+# them is never the passive voice. Measured across the 14 Manuscript documents on
+# 2026-09-08, where the regex found 384 constructions: `often` accounted for 19 of
+# them ("is often used" — the adverb slot already allows `\w+ly`, but not this),
+# `even` 5, `between` 4, `open` 4, `when` 3. Those five alone were 9% of every hit
+# in the book, and not one was a passive.
+#
+# Kept deliberately narrow. Participial *adjectives* — "is complicated", "is
+# hidden", "is unexpected" — are the other large false-positive class and are NOT
+# listed, because telling "the design is complicated" (adjective) from "the design
+# is complicated by X" (passive) needs the sentence, not the word. A regex that
+# guesses at those would trade one kind of wrong answer for another; the check's
+# target still says to eyeball the hits.
+_NOT_PARTICIPLES = frozenset({
+    "often", "even", "between", "open", "when", "then", "seven", "eleven",
+    "dozen", "citizen", "oxygen", "token", "garden", "golden", "wooden",
+    "sudden", "kitten", "linen", "omen", "siren", "speed", "greed", "indeed",
+    "need", "deed", "seed", "weed", "breed", "creed", "freed", "agreed",
+    "exceed", "proceed", "succeed", "embed", "bed", "red", "shed", "sled",
+})
+
+
+def _passive_matches(text: str) -> list[str]:
+    """Passive-voice candidates in `text`, minus the never-participle false hits."""
+    return [
+        m.group(0) for m in _PASSIVE_RE.finditer(text)
+        if m.group("participle").lower() not in _NOT_PARTICIPLES
+    ]
 _ACRONYM_RE = re.compile(r"\b[A-Z]{2,}s?\b")
 # The audience is architects and senior engineers, so these need no expansion.
 # Part numbers read as acronyms otherwise: "Part II", "Part IV".
@@ -2083,8 +2122,8 @@ def _prose_text_checks(
         [s[:120] for s in nested[:5]],
     ))
 
-    passives = _PASSIVE_RE.findall(measured)
-    passive_sentences = [s for s in sentences if _PASSIVE_RE.search(s)]
+    passives = _passive_matches(measured)
+    passive_sentences = [s for s in sentences if _passive_matches(s)]
     passive_pct = 100 * len(passive_sentences) / len(sentences) if sentences else 0.0
     checks.append(_check(
         "passive_constructions",
