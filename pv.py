@@ -2750,6 +2750,14 @@ def _prose_check_from_doc(
             "one metaphor per passage",
             "chapter opens with a hook and closes with a tease",
             "no outline residue left as prose",
+            # Sarah's Chapter 11 comments (2026-10-04). A grep for "currently" or
+            # "today" finds 37 hits across the manuscript and about two are dated
+            # claims, so these stay with a reader.
+            "no claim that will date: vendor prices and comparisons, 'at the time of "
+            "writing'",
+            "no absolute claim the reader can refute: no, nowhere, never, only",
+            "every number names its base: 1% of what, for whom",
+            "each it, this, otherwise and unexpected has a referent the reader can name",
         ],
     }
 
