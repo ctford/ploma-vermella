@@ -3060,3 +3060,35 @@ def test_contraction_share_ignores_words_that_merely_contain_the_forms():
     """`it is` must match on word boundaries, not inside `exist is`."""
     check = _check_named(pv._prose_text_checks("Exist is fine; Edith isn’t."), "contraction_share")
     assert check["value"].startswith("100%")
+
+
+def test_acronym_definitions_match_by_initials():
+    text = "Track the return on investment (ROI). A distributed denial-of-service (DDoS) hits."
+    defs = [(a, e) for a, e, _ in pv._acronym_definitions(text)]
+    assert defs == [
+        ("ROI", "return on investment"), ("DDoS", "distributed denial-of-service"),
+    ]
+
+
+def test_acronyms_expanded_again_after_their_definition():
+    text = (
+        "Measure the return on investment (ROI) early. "
+        "Whatever the return on investment, own it."
+    )
+    assert pv._acronyms_expanded_again(text) == ["return on investment → ROI x1"]
+
+
+def test_acronyms_expanded_again_counts_a_second_definition():
+    text = "Buy software-as-a-service (SaaS). Later, software as a service (SaaS) again."
+    assert pv._acronyms_expanded_again(text) == ["software-as-a-service → SaaS x1"]
+
+
+def test_acronyms_expanded_again_ignores_uses_before_the_definition():
+    text = "Spec-driven development is new. That is spec-driven development (SDD)."
+    assert pv._acronyms_expanded_again(text) == []
+
+
+def test_assumed_acronyms_are_never_spelled_out():
+    assert pv._acronyms_expanded_again("Large language models do not behave this way.") == [
+        "large language model → LLM x1",
+    ]

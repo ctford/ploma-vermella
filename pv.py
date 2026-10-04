@@ -1871,6 +1871,60 @@ _ASSUMED_ACRONYMS = frozenset(
     {"API", "LLM", "US", "UK", "AI", "IT", "OK", "CTO", "UI", "CEO", "PDF"}
 )
 
+# Once an acronym is defined, Sarah uses it: on Chapter 11 she collapsed
+# `return on investment` to ROI and `large language models` to LLMs. The definition is
+# an expansion followed by the acronym in parentheses, matched by initials — hyphenated
+# words count each part, so `distributed denial-of-service (DDoS)` is found. Measured
+# 2026-10-04 across the manuscript: 6 re-expansions, all real (Ch 4 defines SDD and then
+# spells it out 11 times; Ch 10 defines SaaS twice).
+_ACRONYM_DEF_RE = re.compile(r"\(([A-Z][A-Za-z]*[A-Z])s?\)")
+_ACRONYM_DEF_WORD_RE = re.compile(r"[A-Za-z][A-Za-z’']*")
+# Spelled-out forms of an assumed acronym that Sarah collapses even with no definition in
+# the chapter. Only LLM so far: `user interface` survived her passes on Ch 5 and Ch 8, so
+# UI being assumed does not make the long form wrong. Add one when she collapses it.
+_ASSUMED_EXPANSIONS = {"large language model": "LLM"}
+
+
+def _acronym_definitions(text: str) -> list[tuple[str, str, int]]:
+    """(acronym, expansion, end offset) for each `expansion (ACRONYM)` in the text."""
+    found = []
+    for m in _ACRONYM_DEF_RE.finditer(text):
+        letters = m.group(1).lower()
+        window_start = max(0, m.start() - 160)
+        words = list(_ACRONYM_DEF_WORD_RE.finditer(text, window_start, m.start()))
+        for k in range(2, min(len(words), len(letters)) + 1):
+            if "".join(w.group(0)[0] for w in words[-k:]).lower() == letters:
+                expansion = text[words[-k].start():m.start()].strip()
+                found.append((m.group(1), expansion, m.end()))
+                break
+    return found
+
+
+def _expansion_pattern(expansion: str) -> re.Pattern:
+    """Match an expansion with any spacing or hyphenation, singular or plural."""
+    parts = re.split(r"[\s-]+", expansion.rstrip("s"))
+    return re.compile(r"\b" + r"[\s-]+".join(map(re.escape, parts)) + r"s?\b", re.I)
+
+
+def _acronyms_expanded_again(text: str) -> list[str]:
+    """Spelled-out forms of an acronym the reader already has.
+
+    Either it was defined earlier in the text, or it is one the audience is assumed to
+    know. A second `expansion (ACRONYM)` counts too: the definition belongs once.
+    """
+    counts: dict[str, int] = {}
+    for acronym, expansion, end in _acronym_definitions(text):
+        n = len(_expansion_pattern(expansion).findall(text, end))
+        if n:
+            key = f"{expansion} → {acronym}"
+            counts[key] = counts.get(key, 0) + n
+    for expansion, acronym in _ASSUMED_EXPANSIONS.items():
+        n = len(_expansion_pattern(expansion).findall(text))
+        if n:
+            counts[f"{expansion} → {acronym}"] = n
+    return [f"{key} x{n}" for key, n in counts.items()]
+
+
 # The inclusive "we" is the style guide's single most-edited voice rule, and it is a
 # density rather than a ban: "we engineers" with an explicit referent is allowed, and a
 # quoted source keeps its own pronouns. So this reports a rate and leaves the judgement
@@ -2157,6 +2211,12 @@ def _prose_text_checks(
     checks.append(_check(
         "acronyms_to_verify", "ok" if not acronyms else "review",
         len(acronyms), "each spelled out on first use", acronyms,
+    ))
+
+    expanded = _acronyms_expanded_again(prose if prose is not None else text)
+    checks.append(_check(
+        "acronyms_expanded_again", "ok" if not expanded else "review",
+        len(expanded), "0 — once an acronym is defined, use it", expanded,
     ))
 
     # Spelling and phrase checks read running prose only. A UK spelling inside a code
