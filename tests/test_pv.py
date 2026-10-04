@@ -2994,3 +2994,44 @@ def test_passive_matches_keeps_participial_adjectives():
     """Deliberately not filtered: telling these from passives needs the sentence."""
     assert _passive_matches("The design is complicated.") == ["is complicated"]
     assert _passive_matches("The knowledge is hidden.") == ["is hidden"]
+
+
+def _recording_docs_service(captured, doc):
+    """A Docs service stub that records the arguments documents().get was called with."""
+    class FakeDocuments:
+        def get(self, **kwargs):
+            captured.update(kwargs)
+            return self
+
+        def execute(self):
+            return doc
+
+    class FakeService:
+        def documents(self):
+            return FakeDocuments()
+
+    return FakeService()
+
+
+def test_read_doc_as_written_excludes_pending_suggestions():
+    """The default view splices a reviewer's insertions into the text being measured."""
+    captured = {}
+    doc = {"title": "Chapter 99"}
+    assert pv._read_doc_as_written(_recording_docs_service(captured, doc), "doc1") is doc
+    assert captured == {
+        "documentId": "doc1", "suggestionsViewMode": "PREVIEW_WITHOUT_SUGGESTIONS",
+    }
+
+
+@pytest.mark.parametrize("call", [
+    lambda: pv.fetch_document("doc1"),
+    lambda: pv.word_count("doc1"),
+    lambda: pv.prose_check("doc1"),
+])
+def test_text_reading_commands_ignore_pending_suggestions(monkeypatch, call):
+    captured = {}
+    doc = {"title": "Chapter 99", "body": {"content": []}}
+    monkeypatch.setattr(pv, "_docs_service", lambda: _recording_docs_service(captured, doc))
+    monkeypatch.setattr(pv, "_fetch_comments", lambda *a, **k: [])
+    call()
+    assert captured["suggestionsViewMode"] == "PREVIEW_WITHOUT_SUGGESTIONS"

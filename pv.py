@@ -3617,7 +3617,7 @@ def update_sheet(
 def figure_map(doc_id_or_url: str) -> dict:
     """Return inline-image neighborhoods for a Google Doc."""
     doc_id = _extract_doc_id(doc_id_or_url)
-    doc = _docs_service().documents().get(documentId=doc_id).execute()
+    doc = _read_doc_as_written(_docs_service(), doc_id)
     return {
         "title": doc.get("title", ""),
         "figures": _figure_map_from_doc(doc),
@@ -3900,6 +3900,22 @@ def list_comments(doc_id_or_url: str, include_resolved: bool = False) -> dict:
     return {"count": len(comments), "comments": comments}
 
 
+def _read_doc_as_written(service, doc_id: str) -> dict:
+    """Fetch a document's text as it stands, without a reviewer's pending suggestions.
+
+    The Docs API defaults to SUGGESTIONS_INLINE for anyone who can edit, which splices
+    suggested insertions into the text next to the deletions they replace. Measured
+    2026-10-04 on Chapter 11, with Sarah's 240 suggestions pending: `pv fetch` and
+    `prose-check` read `LLMsarge language models, so far, don’tdo not behave`, so every
+    count taken from a chapter under review described neither the author's text nor
+    hers. Commands that only read text use this; commands that compute indices for a
+    write still read the default view, because that is the view the write lands in.
+    """
+    return service.documents().get(
+        documentId=doc_id, suggestionsViewMode="PREVIEW_WITHOUT_SUGGESTIONS",
+    ).execute()
+
+
 def fetch_document(doc_id_or_url: str, include_resolved: bool = False) -> dict:
     """
     Return {title, text, comments} for the given Google Doc.
@@ -3908,7 +3924,7 @@ def fetch_document(doc_id_or_url: str, include_resolved: bool = False) -> dict:
     to include them; each comment carries a `resolved` boolean either way.
     """
     doc_id = _extract_doc_id(doc_id_or_url)
-    doc = _docs_service().documents().get(documentId=doc_id).execute()
+    doc = _read_doc_as_written(_docs_service(), doc_id)
     return {
         "title": doc.get("title", ""),
         "text": _extract_text(doc),
@@ -4225,11 +4241,11 @@ def word_count(target: str, exclude=None) -> dict:
     if _FOLDER_URL_RE.search(target):
         entries = []
         for item in list_folder(target):
-            doc = service.documents().get(documentId=item["id"]).execute()
+            doc = _read_doc_as_written(service, item["id"])
             entries.append((item["name"], _extract_text(doc)))
         entries.sort(key=lambda pair: pair[0])
     else:
-        doc = service.documents().get(documentId=_extract_doc_id(target)).execute()
+        doc = _read_doc_as_written(service, _extract_doc_id(target))
         entries = [(doc.get("title", ""), _extract_text(doc))]
     return _word_count_summary(entries, exclude)
 
@@ -4261,7 +4277,7 @@ def prose_check(
                 line.strip() for line in handle
                 if line.strip() and not line.lstrip().startswith("#")
             ]
-    doc = _docs_service().documents().get(documentId=doc_id).execute()
+    doc = _read_doc_as_written(_docs_service(), doc_id)
     return _prose_check_from_doc(doc, terms, chapter, phrases)
 
 

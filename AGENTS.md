@@ -179,6 +179,14 @@ entries, not quotations, so a quotation element would be right for a handful and
 roughly 260 — and would tell a screen reader that a definition list is a quote. Lehman's eight
 laws need nothing here; they are bulleted list items and were already indented as a list.
 
+**Text commands read the document without pending suggestions.** The Docs API's default
+view, for anyone who can edit, splices a reviewer's suggested insertions in next to the text
+they replace. Until 2026-10-04 `fetch`, `words` and `prose-check` read that view, so on
+Chapter 11, with Sarah's 240 suggestions pending, they saw `LLMsarge language models, so far,
+don’tdo not behave`. Every measurement of a chapter under review was wrong. They now read
+the author's text as it stands. Commands that compute indices for a write still use the
+default view, because that's the view the write lands in.
+
 **A command that changes nothing exits non-zero.** `edit` and friends still print their
 structured `{"status": "ambiguous", ...}` result — that shape is the point, and the `options`
 tell you what to re-anchor on — but the exit code is 1, so a batch driver cannot report a
