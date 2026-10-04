@@ -279,6 +279,30 @@ When working through review notes (PV bullets or sidebar comments), classify eac
 - **Judgement fix** (single text edit that requires per-instance judgement — sentence rewrite, citation reformat, voice recast): propose one at a time as a `before → after` diff in chat. Apply only after the user says so. Do not batch.
 - **Discussion fix** (structural, ambiguous, or open-ended — section reorganisation, "consider splitting", "feels long", or notes the reviewer flagged as questions): leave alone unless the user explicitly asks. If a discussion fix can be reframed as a mechanical or judgement fix, propose the conversion; otherwise it stays as an open comment.
 
+## Turning Review Feedback into Rules
+
+Harvesting an editor's pass into a work's `style_guide.md` is only half the job. **A rule that
+is written down but not measured, and not applied to the chapters already drafted, will not
+stop the next chapter repeating the mistake.** Measured on Chapter 11 (2026-10-04): it reached
+the editor at 9% contracted and with acronyms spelled out again, both already against written
+rules. The rules dated from 2026-08-31 and the chapter from 2026-06-21. The one later sweep
+covered only what `prose-check` counted, and fixed exactly those things.
+
+When a piece of feedback becomes a rule, in the same pass:
+
+1. **Make it a check if it can be counted.** Add or extend a `prose-check` check, and calibrate
+   it on the chapters the editor has finished: their numbers are the target. Check how noisy it
+   is across the whole manuscript before gating on it.
+2. **If it can't be counted, put it in `needs_a_reader`**, so the reader pass is prompted for
+   it. Don't leave it only in the style guide.
+3. **Run it over every drafted chapter now**, and record the per-chapter result next to the
+   rule. Chapters drafted before the rule existed are where it is broken, and nothing else will
+   bring them back to it.
+4. **Find where the error comes from, if you can.** A rule that fights the output of a drafting
+   step loses until the step changes. Chapter 11's missing contractions came from cleaning
+   transcripts into prose (the author contracts 55% of these forms when speaking; the draft ran
+   at 9%), and the fix belongs in the work's drafting guidance as much as in the checks.
+
 ## Figure Editing Workflow
 
 When fixing figures, avoid broad Google Docs `batchUpdate` edits over multiple figures. Those are fragile because document indices shift after each insertion or deletion.
