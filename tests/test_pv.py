@@ -3035,3 +3035,28 @@ def test_text_reading_commands_ignore_pending_suggestions(monkeypatch, call):
     monkeypatch.setattr(pv, "_fetch_comments", lambda *a, **k: [])
     call()
     assert captured["suggestionsViewMode"] == "PREVIEW_WITHOUT_SUGGESTIONS"
+
+
+def _check_named(checks, name):
+    return next(c for c in checks if c["check"] == name)
+
+
+def test_contraction_share_flags_formally_drafted_prose():
+    text = "You cannot do that. It is not done. There is no way. They are not here."
+    check = _check_named(pv._prose_text_checks(text), "contraction_share")
+    assert check["status"] == "review"
+    assert check["value"].startswith("0%")
+    assert "cannotx1" in check["detail"]
+
+
+def test_contraction_share_passes_the_house_register():
+    text = "You can’t do that. It's done. There's no way. They are here."
+    check = _check_named(pv._prose_text_checks(text), "contraction_share")
+    assert check["status"] == "ok"
+    assert check["value"].startswith("75%")
+
+
+def test_contraction_share_ignores_words_that_merely_contain_the_forms():
+    """`it is` must match on word boundaries, not inside `exist is`."""
+    check = _check_named(pv._prose_text_checks("Exist is fine; Edith isn’t."), "contraction_share")
+    assert check["value"].startswith("100%")

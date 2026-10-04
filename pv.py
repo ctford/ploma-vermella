@@ -1894,6 +1894,22 @@ _HARNESS_ROLE_RE = re.compile(r"\b(guides?|guards?|sensors?|checks?)\b", re.I)
 # nothing else.
 _HARNESS_LIST_JOIN_RE = re.compile(r"^[\s,;/]*(?:and|or)?[\s,;/]*$", re.I)
 
+# Contractions are the house register, not a permission: Sarah contracted Chapter 8
+# from 5 to 43, and on Chapter 11 took the paragraphs she touched from 10% contracted to
+# 41%. The uncontracted form stays where a sentence needs the stress, so this is a share
+# and not a ban. Measured 2026-10-04 on the live manuscript: the chapters she has
+# finished sit at 76% (Ch 5) and 82% (Ch 6); the ones drafted formally at 5–26%.
+_UNCONTRACTED_RE = re.compile(
+    r"\b(?:cannot|do not|does not|did not|is not|are not|was not|were not|will not|"
+    r"would not|should not|could not|has not|have not|had not|it is|there is|you are|"
+    r"they are|what is|you will|you have)\b", re.I,
+)
+_CONTRACTED_RE = re.compile(
+    r"\b(?:ca|do|does|did|is|are|was|were|wo|would|should|could|has|have|had)n[’']t\b"
+    r"|\b(?:it|there|you|they|what|that|I)[’'](?:s|re|ll|d|ve|m)\b", re.I,
+)
+_CONTRACTION_SHARE_TARGET = 0.40
+
 _TIC_PHRASES = (
     "in order to", "the fact that", "able to", "the extent to which",
     "the ability of", "e.g.", "i.e.", " vs ", " vs.",
@@ -2165,6 +2181,19 @@ def _prose_text_checks(
     ):
         found = [f"{n.strip()}x{count(n)}" for n in needles if count(n)]
         checks.append(_check(name, "ok" if not found else "review", len(found), "0", found))
+
+    uncontracted = [m.group(0).lower() for m in _UNCONTRACTED_RE.finditer(measured)]
+    contracted = len(_CONTRACTED_RE.findall(measured))
+    total = len(uncontracted) + contracted
+    share = contracted / total if total else 1.0
+    commonest = sorted(set(uncontracted), key=lambda f: (-uncontracted.count(f), f))
+    checks.append(_check(
+        "contraction_share",
+        "ok" if share >= _CONTRACTION_SHARE_TARGET else "review",
+        f"{share:.0%} ({contracted} contracted, {len(uncontracted)} not)",
+        f"at least {_CONTRACTION_SHARE_TARGET:.0%}; keep the full form only for stress",
+        [f"{f}x{uncontracted.count(f)}" for f in commonest[:8]],
+    ))
 
     # Code indentation and the " | " of a rendered table are not double spaces in prose.
     doubles = len(re.findall(r"[^\n] {2,}", prose if prose is not None else text))
