@@ -1868,7 +1868,7 @@ _ACRONYM_RE = re.compile(r"\b[A-Z]{2,}s?\b")
 # Part numbers read as acronyms otherwise: "Part II", "Part IV".
 _ROMAN_RE = re.compile(r"(?:I{1,3}|IV|VI{0,3}|IX|XI{0,3})")
 _ASSUMED_ACRONYMS = frozenset(
-    {"API", "LLM", "US", "UK", "AI", "IT", "OK", "CTO", "UI", "CEO", "PDF"}
+    {"API", "LLM", "US", "UK", "AI", "IT", "OK", "CTO", "UI", "CEO", "PDF", "GPU"}
 )
 
 # Once an acronym is defined, Sarah uses it: on Chapter 11 she collapsed
