@@ -4161,6 +4161,66 @@ def _dominant_char_style(styles: list[tuple[int, int, dict]], start: int, end: i
     return out
 
 
+def _changed_span(current: str, new: str) -> tuple[int, int]:
+    """Lengths of the prefix and suffix that `current` and `new` share, in characters.
+
+    `pv edit` deletes and re-inserts only what lies between them. Re-inserted text
+    takes the style of the character before it, so replacing the whole anchor wiped
+    any italics, bold or link inside it that the edit never meant to touch. Measured
+    on Chapter 9, 2026-11-12: of 66 edits contracting "it is"-style forms, the one
+    whose anchor began at "*shadow traffic*" came back with "traffic" roman. Anchors
+    are padded with context to make them unique, so the context is where styling
+    gets lost. Compared exactly, not quote-agnostically, so an edit that only
+    straightens or curls a quote still changes it.
+    """
+    prefix = 0
+    limit = min(len(current), len(new))
+    while prefix < limit and current[prefix] == new[prefix]:
+        prefix += 1
+    suffix = 0
+    while (suffix < limit - prefix
+           and current[len(current) - 1 - suffix] == new[len(new) - 1 - suffix]):
+        suffix += 1
+    return prefix, suffix
+
+
+def _edit_requests(
+    start: int,
+    current: str,
+    new: str,
+    styles: list[tuple[int, int, dict]],
+) -> list[dict]:
+    """Requests that turn `current` (the document's text at `start`) into `new`.
+
+    Only the changed middle is deleted and inserted; the shared prefix and suffix
+    are left alone with their styling. The inserted middle then gets the span's
+    dominant style if the replaced text was mixed (see `_dominant_char_style`).
+    """
+    prefix, suffix = _changed_span(current, new)
+    del_start = start + _utf16_len(current[:prefix])
+    del_end = start + _utf16_len(current[:len(current) - suffix])
+    middle = new[prefix:len(new) - suffix]
+    # A pure insertion has nothing of its own to measure, so judge it by the whole
+    # anchor, as before: it sits between the anchor's runs and inherits from one.
+    if del_start == del_end:
+        dominant = _dominant_char_style(styles, start, start + _utf16_len(current))
+    else:
+        dominant = _dominant_char_style(styles, del_start, del_end)
+    requests = []
+    if del_end > del_start:
+        requests.append({"deleteContentRange": {
+            "range": {"startIndex": del_start, "endIndex": del_end}}})
+    if middle:
+        requests.append({"insertText": {"location": {"index": del_start}, "text": middle}})
+        if dominant:
+            requests.append({"updateTextStyle": {
+                "range": {"startIndex": del_start, "endIndex": del_start + _utf16_len(middle)},
+                "textStyle": dominant,
+                "fields": ",".join(sorted(dominant)),
+            }})
+    return requests
+
+
 def _plan_edit_matches(
     flat: str,
     nflat: str,
@@ -4256,19 +4316,10 @@ def edit_document(
     requests = []
     for flat_pos in sorted(positions, reverse=True):
         start = _doc_index_at(runs, flat_pos)
-        end = start + _utf16_len(old)
-        # Capture before deleting: an insert inherits the preceding character's style,
-        # which silently spreads a term's italics across its whole definition.
-        dominant = _dominant_char_style(styles, start, end)
-        requests.append({"deleteContentRange": {"range": {"startIndex": start, "endIndex": end}}})
-        if new:
-            requests.append({"insertText": {"location": {"index": start}, "text": new}})
-            if dominant:
-                requests.append({"updateTextStyle": {
-                    "range": {"startIndex": start, "endIndex": start + _utf16_len(new)},
-                    "textStyle": dominant,
-                    "fields": ",".join(sorted(dominant)),
-                }})
+        # The document's own text, not `old`: the match is quote-agnostic, and the
+        # unchanged prefix and suffix are measured against what is really there.
+        current = flat[flat_pos:flat_pos + len(old)]
+        requests.extend(_edit_requests(start, current, new, styles))
 
     _guarded_batch_update(service, doc_id, requests, doc)
     return {"status": "edited", "occurrences_replaced": len(positions), "old": old, "new": new}

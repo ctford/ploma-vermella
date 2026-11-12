@@ -20,6 +20,7 @@ from pv import (
     _body_paragraphs,
     _build_parser,
     _bullets_plan,
+    _changed_span,
     _chapter_filename,
     _cite_plan,
     _cover_title_page_xhtml,
@@ -32,6 +33,7 @@ from pv import (
     _dominant_char_style,
     _downscale_image,
     _ebook_convert_command,
+    _edit_requests,
     _epub_nav,
     _epub_package,
     _extract_blocks,
@@ -3103,3 +3105,44 @@ def test_resolve_reply_body_carries_reply_text():
     assert _resolve_reply_body("Glossed in Ch 1 instead.") == {
         "action": "resolve", "content": "Glossed in Ch 1 instead.",
     }
+
+
+def test_changed_span_finds_the_shared_prefix_and_suffix():
+    old, new = "traffic. If you are designing", "traffic. If you’re designing"
+    assert _changed_span(old, new) == (15, 12)
+
+
+def test_changed_span_does_not_let_prefix_and_suffix_overlap():
+    # "aa" -> "aaa": everything shared, one character inserted
+    prefix, suffix = _changed_span("aa", "aaa")
+    assert prefix + suffix <= 2
+
+
+def test_changed_span_treats_a_quote_change_as_a_change():
+    assert _changed_span("it's", "it’s") == (2, 1)
+
+
+def test_edit_requests_leave_styled_context_untouched():
+    """Added 2026-11-12: an anchor padded with context began at italic "shadow traffic".
+
+    Replacing the whole anchor re-inserted "traffic" with the plain style of the text
+    around it. Only the changed middle should be deleted and inserted.
+    """
+    current = "traffic. If you are designing"
+    styles = [(100, 107, {"italic": True}), (107, 129, {})]
+    requests = _edit_requests(100, current, "traffic. If you’re designing", styles)
+    assert requests == [
+        {"deleteContentRange": {"range": {"startIndex": 115, "endIndex": 117}}},   # " a"
+        {"insertText": {"location": {"index": 115}, "text": "’"}},
+    ]                                                   # "traffic" is never touched
+
+
+def test_edit_requests_restyle_a_mixed_replacement_by_its_majority():
+    styles = [(1, 13, {"italic": True}), (13, 60, {})]
+    requests = _edit_requests(1, "x" * 59, "y" * 59, styles)
+    assert requests[-1]["updateTextStyle"]["textStyle"] == {"italic": False}
+
+
+def test_edit_requests_only_delete_when_text_is_cut():
+    requests = _edit_requests(1, "a big cat", "a cat", [(1, 10, {})])
+    assert requests == [{"deleteContentRange": {"range": {"startIndex": 3, "endIndex": 7}}}]

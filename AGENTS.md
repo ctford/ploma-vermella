@@ -145,8 +145,10 @@ leading indent on brace lines.
 **Italics spill off a term onto its definition, and no plain-text check can see it.**
 Google Docs gives inserted text the character style of the character before it, so an edit
 anchored at an italic term and running on into plain prose — `*Transferable*, in the sense
-that…` — comes back wholly italic. `pv edit` stopped causing this on 2026-09-04, but that
-does nothing for damage already in a document: a text sweep cannot see styling at all, and
+that…` — comes back wholly italic. `pv edit` stopped causing this on 2026-09-04, and since 2026-11-12 it
+replaces only the characters that differ between `old` and `new`, so styling in the context
+you pad an anchor with survives (that padding is where a 66-edit contraction pass on Chapter 9
+lost one italic). But neither fix does anything for damage already in a document: a text sweep cannot see styling at all, and
 the term checks ask whether a term *is* italic, never where its italics **stop**.
 `prose-check`'s `italics_run_past_the_term` closes that gap. It reports three shapes a
 term-as-term italic never has — the run opens on punctuation, crosses a sentence boundary,
