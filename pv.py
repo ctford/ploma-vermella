@@ -3796,7 +3796,8 @@ def _slide_draw_plan(spec: dict, page_id: str, prefix: str) -> list[dict]:
            {"type": "arrow", "from": "plant.bottom", "via": [[560, 260], [155, 260]],
             "to": "cmp.bottom", "dashed": true}]}
 
-    Shapes (`box` rounded, `rect`, `circle`, `text` with no outline) take `text`,
+    Shapes (`box` rounded, `rect`, `circle`, `text` with no outline, or `shape` with a
+    `"shape"` naming any Slides shape type, such as `CAN` or `TRIANGLE`) take `text`,
     `bold`, `italic`, `size`, `align` (left/center/right), `dashed`, `fill` (a light
     gray, or omitted for none), `outline` (default true except for `text`), and
     `color` (a dark gray, for text and outline). `arrow` and `line` take `from`,
@@ -3838,7 +3839,15 @@ def _slide_draw_plan(spec: dict, page_id: str, prefix: str) -> list[dict]:
         oid = _slide_draw_object_id(prefix, name)
         color = _gray_level(el.get("color", "#000000"), f"{where} color")
 
-        if kind in _SLIDE_DRAW_SHAPES:
+        if kind in _SLIDE_DRAW_SHAPES or kind == "shape":
+            if kind == "shape":
+                shape_type = el.get("shape", "")
+                if not re.fullmatch(r"[A-Z][A-Z0-9_]*", shape_type or ""):
+                    raise SlideDrawError(
+                        f"{where}: \"shape\" must name a Slides shape type, e.g. CAN or "
+                        "TRIANGLE.")
+            else:
+                shape_type = _SLIDE_DRAW_SHAPES[kind]
             try:
                 x, y, w, h = (float(el[k]) for k in ("x", "y", "w", "h"))
             except KeyError as exc:
@@ -3848,7 +3857,7 @@ def _slide_draw_plan(spec: dict, page_id: str, prefix: str) -> list[dict]:
             boxes[name] = (x, y, w, h)
             requests.append({"createShape": {
                 "objectId": oid,
-                "shapeType": _SLIDE_DRAW_SHAPES[kind],
+                "shapeType": shape_type,
                 "elementProperties": {
                     "pageObjectId": page_id,
                     "size": {"width": {"magnitude": _emu(w), "unit": "EMU"},
@@ -3947,7 +3956,7 @@ def _slide_draw_plan(spec: dict, page_id: str, prefix: str) -> list[dict]:
         else:
             raise SlideDrawError(
                 f"{where}: type {kind!r} must be one of "
-                f"{sorted(set(_SLIDE_DRAW_SHAPES) | _SLIDE_DRAW_LINES)}.")
+                f"{sorted(set(_SLIDE_DRAW_SHAPES) | _SLIDE_DRAW_LINES | {'shape'})}.")
     return requests
 
 

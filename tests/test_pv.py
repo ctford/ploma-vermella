@@ -3388,3 +3388,17 @@ def test_parser_accepts_build_from_manifest_and_manifest_check():
     args = _build_parser().parse_args(["build-epub", "--manifest", "book.json"])
     assert args.manifest == "book.json" and args.docs == []
     assert _build_parser().parse_args(["manifest-check", "book.json"]).manifest == "book.json"
+
+
+def test_slide_draw_shape_takes_any_slides_shape_type():
+    plan = _slide_draw_plan({"elements": [
+        {"id": "db", "type": "shape", "shape": "CAN", "x": 0, "y": 0, "w": 30, "h": 36}]},
+        "p", "pvtest")
+    assert _req(plan, "createShape", "pvtest_db")["shapeType"] == "CAN"
+
+
+def test_slide_draw_shape_refuses_a_malformed_shape_type():
+    with pytest.raises(SlideDrawError, match="shape type"):
+        _slide_draw_plan({"elements": [
+            {"id": "x", "type": "shape", "shape": "can; drop", "x": 0, "y": 0, "w": 9, "h": 9}]},
+            "p", "pvtest")
