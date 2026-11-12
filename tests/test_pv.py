@@ -94,6 +94,7 @@ from pv import (
     _shape_text,
     _slide_draw_plan,
     _slide_insertion_index,
+    _slide_swap_plan,
     _slugify,
     _style_plan,
     _suggestions_from_doc,
@@ -3275,3 +3276,21 @@ def test_parser_accepts_slide_draw_with_after_or_replace():
     with pytest.raises(SystemExit):
         _build_parser().parse_args(["slide-draw", "PRES", "spec.json", "--after", "a",
                                     "--replace", "b"])
+
+
+def test_slide_swap_moves_a_later_redraw_into_the_old_slot_then_deletes_the_old():
+    plan = _slide_swap_plan(["a", "old", "new", "z"], "old", "new")
+    assert plan[0]["updateSlidesPosition"] == {"slideObjectIds": ["new"], "insertionIndex": 1}
+    assert plan[1] == {"deleteObject": {"objectId": "old"}}
+
+
+def test_slide_swap_aims_past_the_old_slide_when_the_redraw_is_earlier():
+    plan = _slide_swap_plan(["new", "a", "old"], "old", "new")
+    assert plan[0]["updateSlidesPosition"]["insertionIndex"] == 3
+
+
+def test_slide_swap_refuses_missing_or_identical_slides():
+    with pytest.raises(SlideDrawError):
+        _slide_swap_plan(["a", "b"], "a", "missing")
+    with pytest.raises(SlideDrawError):
+        _slide_swap_plan(["a", "b"], "a", "a")

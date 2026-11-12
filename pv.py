@@ -3960,6 +3960,58 @@ def _slide_insertion_index(slide_ids: list[str], after: str | None) -> int:
     return slide_ids.index(after) + 1
 
 
+def _slide_swap_plan(slide_ids: list[str], old: str, new: str) -> list[dict]:
+    """Requests that put slide `new` where `old` is and delete `old`. Pure.
+
+    A figure's slide position is how the deck is read ("slide N holds Figure N" where the
+    deck is kept in order), so the redraw takes the old slide's place rather than sitting
+    beside it.
+    """
+    for name, sid in (("old", old), ("new", new)):
+        if sid not in slide_ids:
+            raise SlideDrawError(f"No {name} slide with object ID {sid!r} in this presentation.")
+    if old == new:
+        raise SlideDrawError("The old and new slides are the same slide.")
+    old_index = slide_ids.index(old)
+    # updateSlidesPosition's insertionIndex counts positions before the move, so moving
+    # a slide down past the old one lands it one place early unless we aim past it.
+    target = old_index if slide_ids.index(new) > old_index else old_index + 1
+    return [
+        {"updateSlidesPosition": {"slideObjectIds": [new], "insertionIndex": target}},
+        {"deleteObject": {"objectId": old}},
+    ]
+
+
+def slide_swap(presentation_id_or_url: str, old: str, new: str) -> dict:
+    """Move slide `new` into slide `old`'s position and delete `old`."""
+    presentation_id = _extract_presentation_id(presentation_id_or_url)
+    service = _slides_service()
+    presentation = service.presentations().get(presentationId=presentation_id).execute()
+    slide_ids = [s["objectId"] for s in presentation.get("slides", [])]
+    body = {"requests": _slide_swap_plan(slide_ids, old, new)}
+    revision = presentation.get("revisionId")
+    if revision:
+        body["writeControl"] = {"requiredRevisionId": revision}
+    try:
+        service.presentations().batchUpdate(presentationId=presentation_id, body=body).execute()
+    except HttpError as exc:
+        if revision and exc.resp.status in (400, 409) and _is_revision_conflict(exc):
+            raise DocumentChanged(
+                "The presentation changed while pv was preparing the swap, so pv refused "
+                "to write. Nothing was modified. Re-run the command."
+            ) from exc
+        raise
+    return {
+        "status": "swapped",
+        "presentation_id": presentation_id,
+        "deleted": old,
+        "page_object_id": new,
+        # 1-based slot the redraw now occupies, after the old slide is gone
+        "position": slide_ids.index(old) + (1 if slide_ids.index(new) > slide_ids.index(old)
+                                            else 0),
+    }
+
+
 def slide_draw(
     presentation_id_or_url: str,
     spec: dict,
@@ -5727,6 +5779,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--replace", metavar="PAGE_OBJECT_ID",
         help="Clear this slide and draw on it — for iterating on a slide pv drew.")
 
+    p_slide_swap = sub.add_parser(
+        "slide-swap",
+        help="Put a redrawn slide where the old one was, and delete the old one.",
+    )
+    p_slide_swap.add_argument("presentation", metavar="PRESENTATION_URL")
+    p_slide_swap.add_argument("old", metavar="OLD_PAGE_ID")
+    p_slide_swap.add_argument("new", metavar="NEW_PAGE_ID")
+
     p_sheet_fetch = sub.add_parser(
         "sheet-fetch",
         help="Fetch Google Sheet metadata and optional range values.",
@@ -6368,6 +6428,8 @@ def main() -> None:
         raw = sys.stdin.read() if args.spec == "-" else Path(args.spec).read_text()
         result = slide_draw(args.presentation, json.loads(raw),
                             after=args.after, replace=args.replace)
+    elif args.command == "slide-swap":
+        result = slide_swap(args.presentation, args.old, args.new)
     elif args.command == "sheet-fetch":
         result = fetch_sheet(args.sheet, range_name=args.range_name)
     elif args.command == "sheet-update":
