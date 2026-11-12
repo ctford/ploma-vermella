@@ -352,7 +352,15 @@ Never commit:
 
 ## Known Limitations
 
-Google Docs does not expose text-anchored comment creation via any public API (Drive API, Docs API, or Apps Script). Comments post to the sidebar with `quotedFileContent` visible but without yellow text highlighting. This is a deliberate Google restriction.
+~~Google Docs does not expose text-anchored comment creation via any public API.~~ **No longer true
+(found 2026-11-12).** The Docs API's `documents.batchUpdate` now accepts `insertComment` with a `range`
+(`startIndex`/`endIndex`), and it creates a properly anchored, highlighted comment. Reading works too:
+`documents.get` with `commentsViewMode=COMMENTS_VIEW_MODE_INCLUDED` (plus
+`suggestionsViewMode=SUGGESTIONS_INLINE` and `includeTabsContent=true`) returns comment threads and
+each anchor's ranges, which is the only way to place comments on a doc made by *Compare documents*,
+where the Drive API's `quotedFileContent` comes back empty. The installed client library predates
+both, so call them over `AuthorizedSession`. `pv comment` and `pv note` still post unanchored sidebar
+comments via the Drive API; moving them to `insertComment` is the obvious next step.
 
 ## Setup
 
