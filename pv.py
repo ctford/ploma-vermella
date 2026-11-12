@@ -3936,6 +3936,11 @@ def _slide_draw_plan(spec: dict, page_id: str, prefix: str) -> list[dict]:
             if head not in {"end", "start", "both", "none"}:
                 raise SlideDrawError(f"{where}: head must be end, start, both or none.")
             segments = list(zip(points, points[1:]))
+            for a, b in segments:
+                if a == b:
+                    raise SlideDrawError(
+                        f"{where}: a segment has zero length (both ends at {list(a)}); "
+                        "move one end or the shape it attaches to.")
             for k, (a, b) in enumerate(segments):
                 seg_id = (oid if len(segments) == 1
                           else _slide_draw_object_id(prefix, f"{name}_s{k}"))

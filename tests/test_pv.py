@@ -3402,3 +3402,10 @@ def test_slide_draw_shape_refuses_a_malformed_shape_type():
         _slide_draw_plan({"elements": [
             {"id": "x", "type": "shape", "shape": "can; drop", "x": 0, "y": 0, "w": 9, "h": 9}]},
             "p", "pvtest")
+
+
+def test_slide_draw_refuses_a_zero_length_segment():
+    with pytest.raises(SlideDrawError, match="zero length"):
+        _slide_draw_plan({"elements": [
+            {"id": "a", "type": "box", "x": 0, "y": 0, "w": 50, "h": 20},
+            {"id": "z", "type": "arrow", "from": [50, 10], "to": "a.right"}]}, "p", "pvtest")
