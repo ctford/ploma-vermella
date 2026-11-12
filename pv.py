@@ -4029,16 +4029,31 @@ def fetch_document(doc_id_or_url: str, include_resolved: bool = False) -> dict:
     }
 
 
-def resolve_comment(doc_id_or_url: str, comment_id: str) -> dict:
-    """Resolve a comment by posting a reply with action=resolve."""
+def _resolve_reply_body(reply: str | None = None) -> dict:
+    """Reply body that resolves a comment, carrying the reply text if there is one.
+
+    Drive takes the explanation and the resolution as one reply, so the editor sees
+    why the comment was closed in the same thread entry that closes it.
+    """
+    body = {"action": "resolve"}
+    if reply:
+        body["content"] = reply
+    return body
+
+
+def resolve_comment(doc_id_or_url: str, comment_id: str, reply: str | None = None) -> dict:
+    """Resolve a comment by posting a reply with action=resolve, optionally with text."""
     doc_id = _extract_doc_id(doc_id_or_url)
     _drive_service().replies().create(
         fileId=doc_id,
         commentId=comment_id,
-        body={"action": "resolve"},
+        body=_resolve_reply_body(reply),
         fields="id,action",
     ).execute()
-    return {"status": "resolved", "comment_id": comment_id}
+    result = {"status": "resolved", "comment_id": comment_id}
+    if reply:
+        result["reply"] = reply
+    return result
 
 
 def resolve_all_comments(doc_id_or_url: str) -> dict:
@@ -5582,6 +5597,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_resolve.add_argument("doc", metavar="DOC_URL")
     p_resolve.add_argument("comment_id", metavar="COMMENT_ID",
                            help="Comment ID (use `pv comments` to list ids).")
+    p_resolve.add_argument("--reply", metavar="TEXT",
+                           help="Reply to the comment as it is resolved, "
+                                "e.g. to tell the editor what changed.")
 
     p_resolve_all = sub.add_parser("resolve-all", help="Resolve every unresolved comment on a doc.")
     p_resolve_all.add_argument("doc", metavar="DOC_URL")
@@ -6001,7 +6019,7 @@ def main() -> None:
     elif args.command == "comments":
         result = list_comments(args.doc, include_resolved=args.include_resolved)
     elif args.command == "resolve":
-        result = resolve_comment(args.doc, args.comment_id)
+        result = resolve_comment(args.doc, args.comment_id, reply=args.reply)
     elif args.command == "resolve-all":
         result = resolve_all_comments(args.doc)
     elif args.command == "comment":

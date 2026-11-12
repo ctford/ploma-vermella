@@ -83,6 +83,7 @@ from pv import (
     _replace_body_range_plan,
     _replace_image_plan,
     _replace_section_plan,
+    _resolve_reply_body,
     _review_copy_title,
     _same_chapter,
     _sentences,
@@ -3092,3 +3093,13 @@ def test_assumed_acronyms_are_never_spelled_out():
     assert pv._acronyms_expanded_again("Large language models do not behave this way.") == [
         "large language model → LLM x1",
     ]
+
+
+def test_resolve_reply_body_resolves_without_text():
+    assert _resolve_reply_body() == {"action": "resolve"}
+
+
+def test_resolve_reply_body_carries_reply_text():
+    assert _resolve_reply_body("Glossed in Ch 1 instead.") == {
+        "action": "resolve", "content": "Glossed in Ch 1 instead.",
+    }

@@ -107,7 +107,7 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
                                                        # rows-json is a list of equal-length rows, --header bolds the first
 .venv/bin/pv comment <doc-url> <quoted-text> <text>    # anchored sidebar comment
 .venv/bin/pv comments <doc-url> [--include-resolved]   # list comments: id, content, quoted text, resolved
-.venv/bin/pv resolve <doc-url> <comment-id>            # resolve a comment
+.venv/bin/pv resolve <doc-url> <comment-id> [--reply TEXT]  # resolve a comment, optionally replying to say what changed
 .venv/bin/pv resolve-all <doc-url>                     # resolve every unresolved comment
 .venv/bin/pv build-epub <doc-url> ... [-o OUT] [--title T] [--subtitle S] [--author A] [--cover IMG] [--max-image-width N] [--no-optimize] [--part "TITLE=START_DOC_URL" ...]
                                                        # build an EPUB; book metadata comes from context, not hardcoded; images downscaled to 1600px by default
