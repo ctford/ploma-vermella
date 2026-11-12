@@ -13,6 +13,7 @@ from PIL import Image
 import pv
 from pv import (
     _RUNAWAY_TOLERANCE,
+    SlideDrawError,
     _assign_parts,
     _block_html,
     _blocks_to_xhtml,
@@ -91,6 +92,8 @@ from pv import (
     _sentences,
     _shade_plan,
     _shape_text,
+    _slide_draw_plan,
+    _slide_insertion_index,
     _slugify,
     _style_plan,
     _suggestions_from_doc,
@@ -3146,3 +3149,129 @@ def test_edit_requests_restyle_a_mixed_replacement_by_its_majority():
 def test_edit_requests_only_delete_when_text_is_cut():
     requests = _edit_requests(1, "a big cat", "a cat", [(1, 10, {})])
     assert requests == [{"deleteContentRange": {"range": {"startIndex": 3, "endIndex": 7}}}]
+
+
+# --- slide-draw ----------------------------------------------------------------------
+
+def _req(plan, kind, object_id):
+    return next(r[kind] for r in plan if kind in r and r[kind]["objectId"] == object_id)
+
+
+def test_slide_draw_box_is_placed_in_emu_with_text_in_the_slide_font():
+    spec = {"font": "Arial", "elements": [
+        {"id": "ctl", "type": "box", "x": 100, "y": 50, "w": 120, "h": 40,
+         "text": "Regeneration\n(controller)"}]}
+    plan = _slide_draw_plan(spec, "page1", "pvtest")
+    shape = _req(plan, "createShape", "pvtest_ctl")
+    assert shape["shapeType"] == "ROUND_RECTANGLE"
+    props = shape["elementProperties"]
+    assert props["size"]["width"]["magnitude"] == 120 * 12700
+    assert props["transform"]["translateX"] == 100 * 12700
+    style = _req(plan, "updateTextStyle", "pvtest_ctl")["style"]
+    assert style["fontFamily"] == "Arial"
+    assert style["fontSize"]["magnitude"] == 12
+
+
+def test_slide_draw_shape_without_fill_renders_no_background():
+    plan = _slide_draw_plan({"elements": [
+        {"id": "a", "type": "rect", "x": 0, "y": 0, "w": 10, "h": 10}]}, "p", "pvtest")
+    props = _req(plan, "updateShapeProperties", "pvtest_a")["shapeProperties"]
+    assert props["shapeBackgroundFill"] == {"propertyState": "NOT_RENDERED"}
+
+
+def test_slide_draw_text_element_has_no_outline_by_default():
+    plan = _slide_draw_plan({"elements": [
+        {"id": "lbl", "type": "text", "x": 0, "y": 0, "w": 50, "h": 20, "text": "Error"}]},
+        "p", "pvtest")
+    props = _req(plan, "updateShapeProperties", "pvtest_lbl")["shapeProperties"]
+    assert props["outline"] == {"propertyState": "NOT_RENDERED"}
+
+
+def test_slide_draw_arrow_joins_shape_edges():
+    spec = {"elements": [
+        {"id": "a", "type": "box", "x": 0, "y": 0, "w": 100, "h": 40},
+        {"id": "b", "type": "box", "x": 200, "y": 0, "w": 100, "h": 40},
+        {"id": "ab", "type": "arrow", "from": "a.right", "to": "b.left"}]}
+    plan = _slide_draw_plan(spec, "p", "pvtest")
+    line = _req(plan, "createLine", "pvtest_ab")["elementProperties"]
+    assert line["transform"]["translateX"] == 100 * 12700
+    assert line["transform"]["translateY"] == 20 * 12700
+    assert line["size"]["width"]["magnitude"] == 100 * 12700
+    assert line["size"]["height"]["magnitude"] == 0
+    props = _req(plan, "updateLineProperties", "pvtest_ab")["lineProperties"]
+    assert props["endArrow"] == "FILL_ARROW"
+
+
+def test_slide_draw_leftward_line_flips_with_negative_scale():
+    plan = _slide_draw_plan({"elements": [
+        {"id": "back", "type": "line", "from": [300, 100], "to": [100, 100]}]}, "p", "pvtest")
+    transform = _req(plan, "createLine", "pvtest_back")["elementProperties"]["transform"]
+    assert transform["scaleX"] == -1
+    assert transform["translateX"] == 300 * 12700
+
+
+def test_slide_draw_elbow_arrow_has_one_head_on_the_last_segment():
+    plan = _slide_draw_plan({"elements": [
+        {"id": "fb", "type": "arrow", "from": [500, 100], "via": [[500, 200], [100, 200]],
+         "to": [100, 120]}]}, "p", "pvtest")
+    segs = [r["updateLineProperties"]["lineProperties"]
+            for r in plan if "updateLineProperties" in r]
+    assert len(segs) == 3
+    assert [s["endArrow"] for s in segs] == ["NONE", "NONE", "FILL_ARROW"]
+
+
+def test_slide_draw_refuses_a_hue():
+    with pytest.raises(SlideDrawError, match="neutral gray"):
+        _slide_draw_plan({"elements": [
+            {"id": "a", "type": "box", "x": 0, "y": 0, "w": 10, "h": 10, "fill": "#C8E6C9"}]},
+            "p", "pvtest")
+
+
+def test_slide_draw_refuses_a_dark_fill_behind_text():
+    with pytest.raises(SlideDrawError, match="too dark"):
+        _slide_draw_plan({"elements": [
+            {"id": "a", "type": "box", "x": 0, "y": 0, "w": 10, "h": 10, "fill": "#888888",
+             "text": "Plant"}]}, "p", "pvtest")
+
+
+def test_slide_draw_refuses_light_gray_text():
+    with pytest.raises(SlideDrawError, match="too light"):
+        _slide_draw_plan({"elements": [
+            {"id": "a", "type": "text", "x": 0, "y": 0, "w": 10, "h": 10, "text": "Revision",
+             "color": "#999999"}]}, "p", "pvtest")
+
+
+def test_slide_draw_refuses_a_per_element_font():
+    with pytest.raises(SlideDrawError, match="one family per slide"):
+        _slide_draw_plan({"elements": [
+            {"id": "a", "type": "text", "x": 0, "y": 0, "w": 10, "h": 10, "text": "x",
+             "font": "Inter"}]}, "p", "pvtest")
+
+
+def test_slide_draw_refuses_a_size_off_the_scale():
+    with pytest.raises(SlideDrawError, match="scale"):
+        _slide_draw_plan({"elements": [
+            {"id": "a", "type": "text", "x": 0, "y": 0, "w": 10, "h": 10, "text": "x",
+             "size": 13}]}, "p", "pvtest")
+
+
+def test_slide_draw_refuses_an_arrow_to_an_undefined_shape():
+    with pytest.raises(SlideDrawError, match="no shape with id"):
+        _slide_draw_plan({"elements": [
+            {"type": "arrow", "from": [0, 0], "to": "plant.left"}]}, "p", "pvtest")
+
+
+def test_slide_insertion_index_goes_after_the_named_slide_or_at_the_end():
+    ids = ["s1", "s2", "s3"]
+    assert _slide_insertion_index(ids, "s2") == 2
+    assert _slide_insertion_index(ids, None) == 3
+    with pytest.raises(SlideDrawError):
+        _slide_insertion_index(ids, "nope")
+
+
+def test_parser_accepts_slide_draw_with_after_or_replace():
+    args = _build_parser().parse_args(["slide-draw", "PRES", "spec.json", "--after", "s1"])
+    assert args.command == "slide-draw" and args.after == "s1" and args.replace is None
+    with pytest.raises(SystemExit):
+        _build_parser().parse_args(["slide-draw", "PRES", "spec.json", "--after", "a",
+                                    "--replace", "b"])

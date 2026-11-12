@@ -57,6 +57,8 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
 .venv/bin/pv fetch <doc-url>                           # fetch title + text of a doc
 .venv/bin/pv slides-fetch <presentation-url>           # fetch slide text from a deck
 .venv/bin/pv slides-thumb <presentation-url> <page-id> # get a slide thumbnail URL
+.venv/bin/pv slide-draw <presentation-url> <spec.json|-> [--after PAGE_ID | --replace PAGE_ID]
+                                                            # draw a figure as native shapes from a JSON spec; grays only, one font
 .venv/bin/pv sheet-fetch <sheet-url> [--range A1...]   # read sheet metadata or rows
 .venv/bin/pv sheet-update <sheet-url> <range> <json>   # write rows to a sheet range
 .venv/bin/pv figure-map <doc-url>                      # list image neighborhoods in a doc
@@ -308,6 +310,19 @@ When a piece of feedback becomes a rule, in the same pass:
    step loses until the step changes. Chapter 11's missing contractions came from cleaning
    transcripts into prose (the author contracts 55% of these forms when speaking; the draft ran
    at 9%), and the fix belongs in the work's drafting guidance as much as in the checks.
+
+**`slide-draw` rebuilds a figure as editable shapes, and refuses what won't print.** About 40
+of the figure slides are pasted pictures, many of them image-model redraws, so their labels can't
+be corrected and drift from the text. `pv slide-draw` builds a slide from a JSON spec of shapes
+(`box`, `rect`, `circle`, `text`) and connectors (`arrow`, `line`, with `via` waypoints for elbows),
+positioned in points on the 720 × 405 slide, and attaches arrow ends to shape edges (`"cmp.right"`).
+It enforces the two things that matter for print: **every color must be a neutral gray** (a hue
+is refused, because the print book is black and white), text no lighter than `#555555` and any
+fill behind text no darker than `#CCCCCC`; and **one font family per slide**, set once at the top
+(default Arial, which the native figure slides use), with sizes on a fixed scale. It draws on a
+new slide (`--after` the original, so the two sit side by side) or clears and redraws a slide it
+made (`--replace`). Check each draw by rendering it with `slides-thumb`. Figure conventions live in
+the work's `figure-style.md`.
 
 ## Figure Editing Workflow
 

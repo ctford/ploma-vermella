@@ -8,6 +8,7 @@ import mimetypes
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import urllib.request
 import uuid
@@ -3661,6 +3662,360 @@ def presentation_thumbnail(
     }
 
 
+# --- slide-draw: build a figure slide from a declarative spec ------------------------
+#
+# The figure decks hold ~40 slides that are pasted pictures (many of them image-model
+# redraws), which can't be edited and whose labels drift. `slide-draw` rebuilds a figure
+# as native, editable Slides shapes from a short JSON spec, so labels are exactly what
+# the spec says. It enforces the two rules that matter most for print (see the work's
+# `figure-style.md`): one font family per slide, and nothing that depends on color —
+# every color must be a neutral gray, text must be dark, and a fill behind text light.
+
+_EMU_PER_PT = 12700
+_SLIDE_DRAW_DEFAULT_FONT = "Arial"  # what the native figure slides use (225 runs v 18 Inter)
+_SLIDE_DRAW_FONT_SIZES = (8, 10, 12, 14, 18)
+_SLIDE_DRAW_DEFAULT_SIZE = 12
+_SLIDE_DRAW_DEFAULT_STROKE_PT = 0.75  # 9525 EMU, the most common line weight in the decks
+_SLIDE_DRAW_SHAPES = {
+    "box": "ROUND_RECTANGLE",
+    "rect": "RECTANGLE",
+    "circle": "ELLIPSE",
+    "text": "TEXT_BOX",
+}
+_SLIDE_DRAW_LINES = {"arrow", "line"}
+_SLIDE_DRAW_MAX_TEXT_GRAY = 0x55   # text no lighter than #555555
+_SLIDE_DRAW_MIN_FILL_GRAY = 0xCC   # a fill behind text no darker than #CCCCCC
+_SLIDE_DRAW_ALIGN = {"left": "START", "center": "CENTER", "right": "END"}
+
+
+class SlideDrawError(ValueError):
+    """A slide-draw spec that would draw something wrong, or nothing at all."""
+
+
+def _gray_level(color: str, what: str) -> int:
+    """Return the 0–255 level of a neutral-gray `#RRGGBB`, or refuse a hue.
+
+    The print book is black and white, so a distinction carried by hue disappears.
+    Refusing hue outright is simpler and safer than checking whether two hues happen
+    to differ in luminance.
+    """
+    m = re.fullmatch(r"#?([0-9a-fA-F]{6})", color or "")
+    if not m:
+        raise SlideDrawError(f"{what}: {color!r} is not a #RRGGBB color.")
+    hexval = m.group(1)
+    r, g, b = (int(hexval[i:i + 2], 16) for i in (0, 2, 4))
+    if not (r == g == b):
+        raise SlideDrawError(
+            f"{what}: {color!r} is not a neutral gray. Figures must survive grayscale "
+            "printing, so slide-draw only accepts grays (#RRGGBB with R = G = B). "
+            "Distinguish with labels, line style, or a gray fill instead."
+        )
+    return r
+
+
+def _rgb(level: int) -> dict:
+    v = level / 255
+    return {"rgbColor": {"red": v, "green": v, "blue": v}}
+
+
+def _emu(pt: float) -> int:
+    return round(pt * _EMU_PER_PT)
+
+
+def _slide_draw_object_id(prefix: str, name: str) -> str:
+    """A Slides object ID (5–50 chars, alphanumeric/underscore) for a spec element."""
+    clean = re.sub(r"[^A-Za-z0-9_]", "_", name)
+    return f"{prefix}_{clean}"[:50]
+
+
+def _slide_draw_anchor(ref, boxes: dict, where: str) -> tuple[float, float]:
+    """Resolve an arrow end: `[x, y]` in points, or `"id.side"` on a drawn shape.
+
+    Sides are `top`, `bottom`, `left`, `right` (the midpoint of that edge) and `center`.
+    """
+    if isinstance(ref, (list, tuple)) and len(ref) == 2:
+        return float(ref[0]), float(ref[1])
+    if not isinstance(ref, str) or "." not in ref:
+        raise SlideDrawError(f"{where}: {ref!r} must be [x, y] or \"id.side\".")
+    name, side = ref.rsplit(".", 1)
+    if name not in boxes:
+        raise SlideDrawError(f"{where}: no shape with id {name!r} (arrows can only "
+                             "attach to shapes defined earlier in the spec).")
+    x, y, w, h = boxes[name]
+    points = {
+        "top": (x + w / 2, y),
+        "bottom": (x + w / 2, y + h),
+        "left": (x, y + h / 2),
+        "right": (x + w, y + h / 2),
+        "center": (x + w / 2, y + h / 2),
+    }
+    if side not in points:
+        raise SlideDrawError(f"{where}: side {side!r} must be one of {sorted(points)}.")
+    return points[side]
+
+
+def _slide_draw_segment(object_id: str, page_id: str, start, end) -> dict:
+    """A createLine request running from `start` to `end` (points).
+
+    A Slides line runs from its box's top-left to bottom-right; negative scale flips
+    it, which is how a line points left or up. Probed against the live API 2026-11-12.
+    """
+    (x1, y1), (x2, y2) = start, end
+    dx, dy = x2 - x1, y2 - y1
+    return {"createLine": {
+        "objectId": object_id,
+        "lineCategory": "STRAIGHT",
+        "elementProperties": {
+            "pageObjectId": page_id,
+            "size": {
+                "width": {"magnitude": _emu(abs(dx)), "unit": "EMU"},
+                "height": {"magnitude": _emu(abs(dy)), "unit": "EMU"},
+            },
+            "transform": {
+                "scaleX": -1 if dx < 0 else 1,
+                "scaleY": -1 if dy < 0 else 1,
+                "translateX": _emu(x1),
+                "translateY": _emu(y1),
+                "unit": "EMU",
+            },
+        },
+    }}
+
+
+def _slide_draw_plan(spec: dict, page_id: str, prefix: str) -> list[dict]:
+    """Translate a slide-draw spec into Slides batchUpdate requests. Pure.
+
+    Spec, all positions and sizes in points (a default slide is 720 × 405):
+
+        {"font": "Arial", "size": 12, "stroke": 0.75,
+         "elements": [
+           {"id": "ctl", "type": "box", "x": 200, "y": 120, "w": 120, "h": 50,
+            "text": "Regeneration\\n(controller)"},
+           {"id": "cmp", "type": "circle", "x": 140, "y": 130, "w": 30, "h": 30},
+           {"type": "arrow", "from": "cmp.right", "to": "ctl.left"},
+           {"type": "arrow", "from": "plant.bottom", "via": [[560, 260], [155, 260]],
+            "to": "cmp.bottom", "dashed": true}]}
+
+    Shapes (`box` rounded, `rect`, `circle`, `text` with no outline) take `text`,
+    `bold`, `italic`, `size`, `align` (left/center/right), `dashed`, `fill` (a light
+    gray, or omitted for none), `outline` (default true except for `text`), and
+    `color` (a dark gray, for text and outline). `arrow` and `line` take `from`,
+    `to`, optional `via` waypoints, `dashed`, `color`, `stroke`, and `head`
+    (`end`, `start`, `both` or `none`; arrows default to `end`).
+
+    One font for the whole slide: there is no per-element font, on purpose.
+    """
+    if not isinstance(spec, dict) or not isinstance(spec.get("elements"), list):
+        raise SlideDrawError("The spec must be an object with an \"elements\" list.")
+    for key in spec:
+        if key not in {"font", "size", "stroke", "elements"}:
+            raise SlideDrawError(
+                f"Unknown top-level key {key!r}. Allowed: font, size, stroke, elements.")
+    font = spec.get("font", _SLIDE_DRAW_DEFAULT_FONT)
+    if not isinstance(font, str) or not font.strip():
+        raise SlideDrawError("\"font\" must name one font family.")
+    base_size = spec.get("size", _SLIDE_DRAW_DEFAULT_SIZE)
+    base_stroke = float(spec.get("stroke", _SLIDE_DRAW_DEFAULT_STROKE_PT))
+
+    requests: list[dict] = []
+    boxes: dict[str, tuple[float, float, float, float]] = {}
+    seen: set[str] = set()
+
+    for n, el in enumerate(spec["elements"], start=1):
+        label = el.get("id") if isinstance(el, dict) else None
+        where = f"element {n}" + (f" ({label})" if label else "")
+        if not isinstance(el, dict):
+            raise SlideDrawError(f"{where}: must be an object.")
+        if "font" in el:
+            raise SlideDrawError(
+                f"{where}: per-element fonts aren't allowed — one family per slide. "
+                "Set \"font\" at the top of the spec.")
+        kind = el.get("type")
+        name = el.get("id") or f"el{n}"
+        if name in seen:
+            raise SlideDrawError(f"{where}: duplicate id {name!r}.")
+        seen.add(name)
+        oid = _slide_draw_object_id(prefix, name)
+        color = _gray_level(el.get("color", "#000000"), f"{where} color")
+
+        if kind in _SLIDE_DRAW_SHAPES:
+            try:
+                x, y, w, h = (float(el[k]) for k in ("x", "y", "w", "h"))
+            except KeyError as exc:
+                raise SlideDrawError(f"{where}: missing {exc.args[0]!r}.") from None
+            if w <= 0 or h <= 0:
+                raise SlideDrawError(f"{where}: w and h must be positive.")
+            boxes[name] = (x, y, w, h)
+            requests.append({"createShape": {
+                "objectId": oid,
+                "shapeType": _SLIDE_DRAW_SHAPES[kind],
+                "elementProperties": {
+                    "pageObjectId": page_id,
+                    "size": {"width": {"magnitude": _emu(w), "unit": "EMU"},
+                             "height": {"magnitude": _emu(h), "unit": "EMU"}},
+                    "transform": {"scaleX": 1, "scaleY": 1, "translateX": _emu(x),
+                                  "translateY": _emu(y), "unit": "EMU"},
+                },
+            }})
+            text = el.get("text", "")
+            fill = el.get("fill")
+            outline = el.get("outline", kind != "text")
+            props: dict = {"contentAlignment": "MIDDLE"}
+            if fill:
+                level = _gray_level(fill, f"{where} fill")
+                if text and level < _SLIDE_DRAW_MIN_FILL_GRAY:
+                    raise SlideDrawError(
+                        f"{where}: fill {fill!r} is too dark behind text; use "
+                        f"#{_SLIDE_DRAW_MIN_FILL_GRAY:02X}{_SLIDE_DRAW_MIN_FILL_GRAY:02X}"
+                        f"{_SLIDE_DRAW_MIN_FILL_GRAY:02X} or lighter.")
+                props["shapeBackgroundFill"] = {"solidFill": {"color": _rgb(level)}}
+            else:
+                props["shapeBackgroundFill"] = {"propertyState": "NOT_RENDERED"}
+            if outline:
+                props["outline"] = {
+                    "outlineFill": {"solidFill": {"color": _rgb(color)}},
+                    "weight": {"magnitude": float(el.get("stroke", base_stroke)), "unit": "PT"},
+                    "dashStyle": "DASH" if el.get("dashed") else "SOLID",
+                }
+            else:
+                props["outline"] = {"propertyState": "NOT_RENDERED"}
+            requests.append({"updateShapeProperties": {
+                "objectId": oid,
+                "shapeProperties": props,
+                "fields": ",".join(sorted(props)),
+            }})
+            if text:
+                if color > _SLIDE_DRAW_MAX_TEXT_GRAY:
+                    raise SlideDrawError(
+                        f"{where}: text color is too light to read in print; use "
+                        f"#{_SLIDE_DRAW_MAX_TEXT_GRAY:02X}{_SLIDE_DRAW_MAX_TEXT_GRAY:02X}"
+                        f"{_SLIDE_DRAW_MAX_TEXT_GRAY:02X} or darker.")
+                size = el.get("size", base_size)
+                if size not in _SLIDE_DRAW_FONT_SIZES:
+                    raise SlideDrawError(
+                        f"{where}: size {size} isn't on the scale {_SLIDE_DRAW_FONT_SIZES}.")
+                align = el.get("align", "center")
+                if align not in _SLIDE_DRAW_ALIGN:
+                    raise SlideDrawError(f"{where}: align must be left, center or right.")
+                requests.append({"insertText": {"objectId": oid, "text": text}})
+                requests.append({"updateTextStyle": {
+                    "objectId": oid,
+                    "textRange": {"type": "ALL"},
+                    "style": {
+                        "fontFamily": font,
+                        "fontSize": {"magnitude": size, "unit": "PT"},
+                        "bold": bool(el.get("bold")),
+                        "italic": bool(el.get("italic")),
+                        "foregroundColor": {"opaqueColor": _rgb(color)},
+                    },
+                    "fields": "fontFamily,fontSize,bold,italic,foregroundColor",
+                }})
+                requests.append({"updateParagraphStyle": {
+                    "objectId": oid,
+                    "textRange": {"type": "ALL"},
+                    "style": {"alignment": _SLIDE_DRAW_ALIGN[align]},
+                    "fields": "alignment",
+                }})
+        elif kind in _SLIDE_DRAW_LINES:
+            if "from" not in el or "to" not in el:
+                raise SlideDrawError(f"{where}: needs both \"from\" and \"to\".")
+            points = [_slide_draw_anchor(el["from"], boxes, f"{where} from")]
+            for k, wp in enumerate(el.get("via", []), start=1):
+                points.append(_slide_draw_anchor(wp, boxes, f"{where} via {k}"))
+            points.append(_slide_draw_anchor(el["to"], boxes, f"{where} to"))
+            head = el.get("head", "end" if kind == "arrow" else "none")
+            if head not in {"end", "start", "both", "none"}:
+                raise SlideDrawError(f"{where}: head must be end, start, both or none.")
+            segments = list(zip(points, points[1:]))
+            for k, (a, b) in enumerate(segments):
+                seg_id = (oid if len(segments) == 1
+                          else _slide_draw_object_id(prefix, f"{name}_s{k}"))
+                requests.append(_slide_draw_segment(seg_id, page_id, a, b))
+                line_props = {
+                    "lineFill": {"solidFill": {"color": _rgb(color)}},
+                    "weight": {"magnitude": float(el.get("stroke", base_stroke)), "unit": "PT"},
+                    "dashStyle": "DASH" if el.get("dashed") else "SOLID",
+                    "startArrow": "FILL_ARROW" if head in {"start", "both"} and k == 0 else "NONE",
+                    "endArrow": ("FILL_ARROW" if head in {"end", "both"} and k == len(segments) - 1
+                                 else "NONE"),
+                }
+                requests.append({"updateLineProperties": {
+                    "objectId": seg_id,
+                    "lineProperties": line_props,
+                    "fields": ",".join(sorted(line_props)),
+                }})
+        else:
+            raise SlideDrawError(
+                f"{where}: type {kind!r} must be one of "
+                f"{sorted(set(_SLIDE_DRAW_SHAPES) | _SLIDE_DRAW_LINES)}.")
+    return requests
+
+
+def _slide_insertion_index(slide_ids: list[str], after: str | None) -> int:
+    """Where a new slide goes: straight after `after`, or at the end."""
+    if after is None:
+        return len(slide_ids)
+    if after not in slide_ids:
+        raise SlideDrawError(f"No slide with object ID {after!r} in this presentation.")
+    return slide_ids.index(after) + 1
+
+
+def slide_draw(
+    presentation_id_or_url: str,
+    spec: dict,
+    after: str | None = None,
+    replace: str | None = None,
+) -> dict:
+    """Draw `spec` on a new slide (after `after`, else at the end), or redraw `replace`.
+
+    `replace` deletes everything on that slide first — use it to iterate on a slide
+    this command drew, not on one holding the only copy of a figure.
+    """
+    presentation_id = _extract_presentation_id(presentation_id_or_url)
+    service = _slides_service()
+    presentation = service.presentations().get(presentationId=presentation_id).execute()
+    slides = presentation.get("slides", [])
+    slide_ids = [s["objectId"] for s in slides]
+    prefix = "pv" + uuid.uuid4().hex[:8]
+    requests: list[dict] = []
+    if replace:
+        if replace not in slide_ids:
+            raise SlideDrawError(f"No slide with object ID {replace!r} in this presentation.")
+        page_id = replace
+        target = slides[slide_ids.index(replace)]
+        requests += [{"deleteObject": {"objectId": e["objectId"]}}
+                     for e in target.get("pageElements", [])]
+    else:
+        page_id = prefix + "_slide"
+        requests.append({"createSlide": {
+            "objectId": page_id,
+            "insertionIndex": _slide_insertion_index(slide_ids, after),
+            "slideLayoutReference": {"predefinedLayout": "BLANK"},
+        }})
+    plan = _slide_draw_plan(spec, page_id, prefix)
+    body = {"requests": requests + plan}
+    revision = presentation.get("revisionId")
+    if revision:
+        body["writeControl"] = {"requiredRevisionId": revision}
+    try:
+        service.presentations().batchUpdate(presentationId=presentation_id, body=body).execute()
+    except HttpError as exc:
+        if revision and exc.resp.status in (400, 409) and _is_revision_conflict(exc):
+            raise DocumentChanged(
+                "The presentation changed while pv was preparing this slide, so pv "
+                "refused to write. Nothing was modified. Re-run the command."
+            ) from exc
+        raise
+    return {
+        "status": "drawn",
+        "presentation_id": presentation_id,
+        "page_object_id": page_id,
+        "replaced": bool(replace),
+        "element_count": len(spec["elements"]),
+        "url": f"https://docs.google.com/presentation/d/{presentation_id}/edit#slide=id.{page_id}",
+    }
+
+
 def fetch_sheet(spreadsheet_id_or_url: str, range_name: str | None = None) -> dict:
     """Return sheet metadata and values for an optional range."""
     spreadsheet_id = _extract_spreadsheet_id(spreadsheet_id_or_url)
@@ -5356,6 +5711,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Thumbnail size. Default: LARGE.",
     )
 
+    p_slide_draw = sub.add_parser(
+        "slide-draw",
+        help="Draw a figure slide from a JSON spec, as native editable shapes "
+             "(grays only, one font per slide).",
+    )
+    p_slide_draw.add_argument("presentation", metavar="PRESENTATION_URL")
+    p_slide_draw.add_argument("spec", metavar="SPEC_JSON",
+                              help="Path to the spec file, or - for stdin.")
+    slide_draw_target = p_slide_draw.add_mutually_exclusive_group()
+    slide_draw_target.add_argument(
+        "--after", metavar="PAGE_OBJECT_ID",
+        help="Insert the new slide straight after this one. Default: at the end.")
+    slide_draw_target.add_argument(
+        "--replace", metavar="PAGE_OBJECT_ID",
+        help="Clear this slide and draw on it — for iterating on a slide pv drew.")
+
     p_sheet_fetch = sub.add_parser(
         "sheet-fetch",
         help="Fetch Google Sheet metadata and optional range values.",
@@ -5993,6 +6364,10 @@ def main() -> None:
             args.page_object_id,
             size=args.size,
         )
+    elif args.command == "slide-draw":
+        raw = sys.stdin.read() if args.spec == "-" else Path(args.spec).read_text()
+        result = slide_draw(args.presentation, json.loads(raw),
+                            after=args.after, replace=args.replace)
     elif args.command == "sheet-fetch":
         result = fetch_sheet(args.sheet, range_name=args.range_name)
     elif args.command == "sheet-update":

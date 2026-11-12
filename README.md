@@ -61,6 +61,8 @@ pv fetch <doc-url>                          # fetch title + text of a doc
 pv note <doc-url> <quoted-text> <comment>   # append a review note
 pv slides-fetch <presentation-url>          # fetch slide text from a deck
 pv slides-thumb <presentation-url> <page-id> # get a slide thumbnail URL
+pv slide-draw <presentation-url> <spec.json|-> [--after PAGE_ID | --replace PAGE_ID]
+                                                  # draw a figure as native shapes from a JSON spec; grays only, one font
 pv sheet-fetch <sheet-url> --range ...      # read sheet rows by range
 pv sheet-update <sheet-url> <range> ...     # write sheet rows from JSON
 pv figure-map <doc-url>                     # inspect image neighborhoods in a doc
