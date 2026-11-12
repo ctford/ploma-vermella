@@ -4191,20 +4191,83 @@ def replace_image(
     plan = _replace_image_plan(doc, caption_anchor)
     if plan["kind"] == "ambiguous":
         return plan["result"]
-    uri = presentation_thumbnail(deck, slide_id, size)["content_url"]
-    _guarded_batch_update(service, doc_id, [
-        {"replaceImage": {
+    thumb = presentation_thumbnail(deck, slide_id, size)
+    uri = thumb["content_url"]
+    old = doc["inlineObjects"][plan["object_id"]]["inlineObjectProperties"]["embeddedObject"]
+    old_w = old["size"]["width"]["magnitude"]
+    old_h = old["size"]["height"]["magnitude"]
+    style = doc.get("documentStyle", {})
+    max_w = (style.get("pageSize", {}).get("width", {}).get("magnitude", 612.0)
+             - style.get("marginLeft", {}).get("magnitude", 72.0)
+             - style.get("marginRight", {}).get("magnitude", 72.0))
+    frame = _image_refit(old_w, old_h, thumb.get("width"), thumb.get("height"), max_w)
+    if frame is None:
+        requests = [{"replaceImage": {
             "imageObjectId": plan["object_id"],
             "uri": uri,
             "imageReplaceMethod": "CENTER_CROP",
-        }}
-    ], doc)
+        }}]
+    else:
+        # Different shape: replaceImage would keep the old frame and crop the new image
+        # to fit it. Measured 2026-11-12: a 16:9 redraw put into a square frame lost
+        # 27.5% of each side, and one put into a wide, short frame lost 26.6% top and
+        # bottom. So delete the old image and insert the new one at its own aspect.
+        at = _inline_object_index(doc, plan["object_id"])
+        width, height = frame
+        requests = [
+            {"deleteContentRange": {"range": {"startIndex": at, "endIndex": at + 1}}},
+            {"insertInlineImage": {
+                "location": {"index": at},
+                "uri": uri,
+                "objectSize": {"width": {"magnitude": width, "unit": "PT"},
+                               "height": {"magnitude": height, "unit": "PT"}},
+            }},
+        ]
+    _guarded_batch_update(service, doc_id, requests, doc)
     return {
         "status": "replaced",
         "object_id": plan["object_id"],
         "caption_body_index": plan["caption_body_index"],
         "slide_id": slide_id,
+        "refitted": frame is not None,
     }
+
+
+def _image_refit(old_w: float, old_h: float, new_w, new_h, max_w: float,
+                 tolerance: float = 0.02):
+    """The (width, height) in points to give a replacement image, or None to replace in place.
+
+    In place is right when the new image has the old frame's shape (within `tolerance`):
+    it keeps any manual sizing. Otherwise keep the old width, capped at the text width,
+    and take the height from the new image's own aspect ratio, so nothing is cropped.
+    """
+    if not (old_w and old_h and new_w and new_h):
+        return None
+    old_aspect, new_aspect = old_w / old_h, new_w / new_h
+    if abs(old_aspect - new_aspect) / new_aspect <= tolerance:
+        return None
+    width = min(old_w, max_w)
+    return (round(width, 2), round(width / new_aspect, 2))
+
+
+def _inline_object_index(doc: dict, object_id: str) -> int:
+    """The document index of the inline object element `object_id`."""
+    def walk(content):
+        for el in content:
+            for pe in el.get("paragraph", {}).get("elements", []):
+                ioe = pe.get("inlineObjectElement")
+                if ioe and ioe.get("inlineObjectId") == object_id:
+                    return pe["startIndex"]
+            for row in el.get("table", {}).get("tableRows", []):
+                for cell in row.get("tableCells", []):
+                    found = walk(cell.get("content", []))
+                    if found is not None:
+                        return found
+        return None
+    found = walk(doc.get("body", {}).get("content", []))
+    if found is None:
+        raise ValueError(f"inline object {object_id!r} not found in the document body")
+    return found
 
 
 def place_figure(

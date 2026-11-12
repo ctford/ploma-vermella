@@ -47,8 +47,10 @@ from pv import (
     _find_matches,
     _heading_plan,
     _image_content_uri,
+    _image_refit,
     _inline_html,
     _inline_object_ids,
+    _inline_object_index,
     _insert_after_plan,
     _insert_before_plan,
     _insert_table_plan,
@@ -3309,3 +3311,32 @@ def test_slide_text_count_matches_case_across_shapes_on_one_slide():
 def test_parser_accepts_slide_edit():
     args = _build_parser().parse_args(["slide-edit", "PRES", "page1", "Informative", "Descriptive"])
     assert (args.page_object_id, args.old, args.new) == ("page1", "Informative", "Descriptive")
+
+
+def test_image_refit_replaces_in_place_when_the_shape_matches():
+    assert _image_refit(468, 263.25, 1600, 900, 468) is None
+
+
+def test_image_refit_resizes_a_wide_image_going_into_a_square_frame():
+    # 16:9 into the old square-ish Figure 9-8 frame: keep width (capped), take height from aspect
+    assert _image_refit(506, 635, 1600, 900, 468) == (468, 263.25)
+
+
+def test_image_refit_resizes_a_wide_image_going_into_a_short_frame():
+    width, height = _image_refit(468, 123, 1600, 900, 468)
+    assert width == 468 and height == 263.25
+
+
+def test_image_refit_skips_when_sizes_are_unknown():
+    assert _image_refit(468, 263, None, None, 468) is None
+
+
+def test_inline_object_index_finds_the_image_element():
+    doc = {"body": {"content": [
+        {"paragraph": {"elements": [{"startIndex": 1, "textRun": {"content": "x"}}]}},
+        {"paragraph": {"elements": [
+            {"startIndex": 40, "inlineObjectElement": {"inlineObjectId": "i.7"}}]}},
+    ]}}
+    assert _inline_object_index(doc, "i.7") == 40
+    with pytest.raises(ValueError):
+        _inline_object_index(doc, "i.99")
