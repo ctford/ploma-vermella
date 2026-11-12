@@ -95,6 +95,7 @@ from pv import (
     _slide_draw_plan,
     _slide_insertion_index,
     _slide_swap_plan,
+    _slide_text_count,
     _slugify,
     _style_plan,
     _suggestions_from_doc,
@@ -3294,3 +3295,17 @@ def test_slide_swap_refuses_missing_or_identical_slides():
         _slide_swap_plan(["a", "b"], "a", "missing")
     with pytest.raises(SlideDrawError):
         _slide_swap_plan(["a", "b"], "a", "a")
+
+
+def test_slide_text_count_matches_case_across_shapes_on_one_slide():
+    def shape(text):
+        return {"shape": {"text": {"textElements": [{"textRun": {"content": text}}]}}}
+    slide = {"pageElements": [shape("Informative"), shape("informative use"),
+                              shape("Informative\n")]}
+    assert _slide_text_count(slide, "Informative") == 2
+    assert _slide_text_count(slide, "Descriptive") == 0
+
+
+def test_parser_accepts_slide_edit():
+    args = _build_parser().parse_args(["slide-edit", "PRES", "page1", "Informative", "Descriptive"])
+    assert (args.page_object_id, args.old, args.new) == ("page1", "Informative", "Descriptive")

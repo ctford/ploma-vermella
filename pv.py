@@ -4012,6 +4012,54 @@ def slide_swap(presentation_id_or_url: str, old: str, new: str) -> dict:
     }
 
 
+def _slide_text_count(slide: dict, text: str) -> int:
+    """How many times `text` occurs, case-sensitively, in one slide's shapes. Pure."""
+    total = 0
+    for element in slide.get("pageElements", []):
+        total += _shape_text(element).count(text)
+    return total
+
+
+def slide_edit(presentation_id_or_url: str, page_object_id: str, old: str, new: str) -> dict:
+    """Replace `old` with `new` in one slide's text, matching case exactly.
+
+    Scoped to a single slide on purpose: a figure deck repeats labels across figures
+    (the harness quadrant appears in several chapters), and a deck-wide replace would
+    change figures nobody meant to touch.
+    """
+    presentation_id = _extract_presentation_id(presentation_id_or_url)
+    service = _slides_service()
+    presentation = service.presentations().get(presentationId=presentation_id).execute()
+    slides = {s["objectId"]: s for s in presentation.get("slides", [])}
+    if page_object_id not in slides:
+        raise SlideDrawError(f"No slide with object ID {page_object_id!r} in this presentation.")
+    found = _slide_text_count(slides[page_object_id], old)
+    if not found:
+        return {"status": "not_found", "page_object_id": page_object_id, "old": old}
+    body = {"requests": [{"replaceAllText": {
+        "containsText": {"text": old, "matchCase": True},
+        "replaceText": new,
+        "pageObjectIds": [page_object_id],
+    }}]}
+    revision = presentation.get("revisionId")
+    if revision:
+        body["writeControl"] = {"requiredRevisionId": revision}
+    try:
+        reply = service.presentations().batchUpdate(
+            presentationId=presentation_id, body=body).execute()
+    except HttpError as exc:
+        if revision and exc.resp.status in (400, 409) and _is_revision_conflict(exc):
+            raise DocumentChanged(
+                "The presentation changed while pv was preparing this edit, so pv refused "
+                "to write. Nothing was modified. Re-run the command."
+            ) from exc
+        raise
+    changed = (reply.get("replies") or [{}])[0].get("replaceAllText", {}).get(
+        "occurrencesChanged", 0)
+    return {"status": "edited", "page_object_id": page_object_id,
+            "occurrences_replaced": changed, "old": old, "new": new}
+
+
 def slide_draw(
     presentation_id_or_url: str,
     spec: dict,
@@ -5787,6 +5835,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p_slide_swap.add_argument("old", metavar="OLD_PAGE_ID")
     p_slide_swap.add_argument("new", metavar="NEW_PAGE_ID")
 
+    p_slide_edit = sub.add_parser(
+        "slide-edit",
+        help="Replace text on one slide (exact case), e.g. to correct a figure label.",
+    )
+    p_slide_edit.add_argument("presentation", metavar="PRESENTATION_URL")
+    p_slide_edit.add_argument("page_object_id", metavar="PAGE_OBJECT_ID")
+    p_slide_edit.add_argument("old")
+    p_slide_edit.add_argument("new")
+
     p_sheet_fetch = sub.add_parser(
         "sheet-fetch",
         help="Fetch Google Sheet metadata and optional range values.",
@@ -6430,6 +6487,8 @@ def main() -> None:
                             after=args.after, replace=args.replace)
     elif args.command == "slide-swap":
         result = slide_swap(args.presentation, args.old, args.new)
+    elif args.command == "slide-edit":
+        result = slide_edit(args.presentation, args.page_object_id, args.old, args.new)
     elif args.command == "sheet-fetch":
         result = fetch_sheet(args.sheet, range_name=args.range_name)
     elif args.command == "sheet-update":

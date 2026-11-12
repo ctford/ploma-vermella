@@ -60,6 +60,7 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
 .venv/bin/pv slide-draw <presentation-url> <spec.json|-> [--after PAGE_ID | --replace PAGE_ID]
                                                             # draw a figure as native shapes from a JSON spec; grays only, one font
 .venv/bin/pv slide-swap <presentation-url> <old-page-id> <new-page-id>   # put a redraw in the old slide's place; delete the old
+.venv/bin/pv slide-edit <presentation-url> <page-id> <old> <new>             # replace text on one slide (exact case)
 .venv/bin/pv sheet-fetch <sheet-url> [--range A1...]   # read sheet metadata or rows
 .venv/bin/pv sheet-update <sheet-url> <range> <json>   # write rows to a sheet range
 .venv/bin/pv figure-map <doc-url>                      # list image neighborhoods in a doc
