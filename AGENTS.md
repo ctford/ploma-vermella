@@ -121,6 +121,9 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
                                                        # what keeps back matter out of the last Part.
 .venv/bin/pv build-pdf <doc-url> ... [-o OUT] [--title T] [--subtitle S] [--author A] [--cover IMG] [--paper-size letter|a4|...] [--keep-epub] [--part "TITLE=START_DOC_URL" ...]
                                                        # build a paginated PDF via the same pipeline as build-epub, rendered with Calibre's ebook-convert
+.venv/bin/pv build-epub --manifest <book.json> / .venv/bin/pv build-pdf --manifest <book.json>
+                                                            # build from a manifest: docs in reading order, Parts, metadata; reports folder drift
+.venv/bin/pv manifest-check <book.json>                            # docs in the source folder the manifest doesn't list, and vice versa
 ```
 
 All commands output JSON. Use `.venv/bin/pv -h` or `.venv/bin/pv <command> -h` for help.
@@ -325,6 +328,16 @@ fill behind text no darker than `#CCCCCC`; and **one font family per slide**, se
 new slide (`--after` the original, so the two sit side by side) or clears and redraws a slide it
 made (`--replace`). Check each draw by rendering it with `slides-thumb`. Figure conventions live in
 the work's `figure-style.md`.
+
+**Build a book from its manifest, not from a folder.** `pv build-epub --manifest <work>/book.json`
+(and `build-pdf`) takes the docs in reading order, the Parts and the metadata from one JSON file in
+the work's context repo, so a stray doc in the source folder can't slip into a build. Measured
+2026-11-12: after an editor's copy of Chapter 9 was promoted, the Manuscript folder held two Chapter 9
+docs plus an Early Release copy of Chapter 1, and the documented folder-listing procedure would have
+built all three. The manifest also names its `source_folder`, so every manifest build reports
+`folder_drift` (docs in the folder it doesn't list, listed docs missing from the folder), and
+`pv manifest-check` gives the same report without building. A doc listed twice, or a Part starting at
+an unlisted doc, is refused.
 
 ## Figure Editing Workflow
 

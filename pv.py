@@ -5434,6 +5434,101 @@ def build_epub(
     }
 
 
+class ManifestError(ValueError):
+    """A build manifest that can't produce a correct build."""
+
+
+def _load_manifest(data: dict, today: str) -> dict:
+    """Turn a book's build manifest into build arguments. Pure.
+
+    The manifest is the authoritative list of what goes in the book, in reading order,
+    so a build never depends on what happens to be sitting in a Drive folder. Measured
+    2026-11-12: promoting an editor's copy of Chapter 9 left two Chapter 9 docs in the
+    Manuscript folder, and the documented procedure ("list the folder, take the docs in
+    reading order") would have built both.
+
+        {"title": "...", "subtitle": "...", "author": "...", "cover": "path/to/cover.jpg",
+         "output_stem": "dist/my-book-{date}",
+         "source_folder": "<Drive folder URL, for the drift check>",
+         "ignore": ["Table of Contents"],
+         "docs": [{"title": "Chapter 01: ...", "id": "<doc id>"}, ...],
+         "parts": [{"title": "Part I: ...", "start": "<doc id>"},
+                   {"title": "", "start": "<doc id>"}]}
+
+    An empty Part title ends the run of Parts, as `--part "=<id>"` does.
+    """
+    if not isinstance(data, dict):
+        raise ManifestError("The manifest must be a JSON object.")
+    docs = data.get("docs")
+    if not isinstance(docs, list) or not docs:
+        raise ManifestError("The manifest needs a non-empty \"docs\" list.")
+    ids = []
+    for n, doc in enumerate(docs, start=1):
+        if not isinstance(doc, dict) or not doc.get("id"):
+            raise ManifestError(f"docs[{n}] needs an \"id\".")
+        ids.append(_extract_doc_id(doc["id"]))
+    dupes = sorted({i for i in ids if ids.count(i) > 1})
+    if dupes:
+        raise ManifestError(f"The manifest lists the same doc more than once: {dupes}.")
+    parts = []
+    for n, part in enumerate(data.get("parts") or [], start=1):
+        start = _extract_doc_id(part.get("start", "")) if isinstance(part, dict) else ""
+        if start not in ids:
+            raise ManifestError(f"parts[{n}] starts at a doc the manifest doesn't list.")
+        parts.append(f"{part.get('title', '')}={start}")
+    stem = data.get("output_stem")
+    return {
+        "docs": ids,
+        "parts": parts,
+        "title": data.get("title"),
+        "subtitle": data.get("subtitle"),
+        "author": data.get("author"),
+        "cover": data.get("cover"),
+        "output_stem": stem.replace("{date}", today) if stem else None,
+        "source_folder": data.get("source_folder"),
+        "ignore": list(data.get("ignore") or []),
+    }
+
+
+def _manifest_drift(manifest_ids: list[str], folder_docs: list[dict],
+                    ignore: list[str]) -> dict:
+    """Docs in the folder the manifest doesn't list, and listed docs missing from it. Pure.
+
+    `ignore` holds folder doc names that are deliberately not in the book (meta docs such
+    as the Table of Contents). A name matches if it equals an entry exactly.
+    """
+    folder_ids = {d["id"] for d in folder_docs}
+    unlisted = [{"id": d["id"], "name": d["name"]} for d in folder_docs
+                if d["id"] not in manifest_ids and d["name"].strip() not in ignore]
+    missing = [i for i in manifest_ids if i not in folder_ids]
+    return {"clean": not unlisted and not missing,
+            "in_folder_not_in_manifest": unlisted,
+            "in_manifest_not_in_folder": missing}
+
+
+def manifest_check(path: str) -> dict:
+    """Compare a build manifest with its source folder in Drive."""
+    m = _load_manifest(json.loads(Path(path).read_text()),
+                       datetime.now().strftime("%Y%m%d"))
+    if not m["source_folder"]:
+        raise ManifestError("The manifest has no \"source_folder\" to check against.")
+    return {"status": "checked", "doc_count": len(m["docs"]),
+            **_manifest_drift(m["docs"], list_folder(m["source_folder"]), m["ignore"])}
+
+
+def _build_args_from_manifest(path: str, ext: str) -> tuple[dict, dict | None]:
+    """Build keyword arguments from a manifest, plus a drift report if it names a folder."""
+    m = _load_manifest(json.loads(Path(path).read_text()),
+                       datetime.now().strftime("%Y%m%d"))
+    kwargs = {"doc_ids_or_urls": m["docs"], "parts": m["parts"] or None,
+              "title": m["title"], "subtitle": m["subtitle"], "author": m["author"],
+              "cover": m["cover"],
+              "output": f"{m['output_stem']}.{ext}" if m["output_stem"] else None}
+    drift = (_manifest_drift(m["docs"], list_folder(m["source_folder"]), m["ignore"])
+             if m["source_folder"] else None)
+    return kwargs, drift
+
+
 def build_pdf(
     doc_ids_or_urls: list[str],
     output: str | None = None,
@@ -5907,6 +6002,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p_slide_edit.add_argument("old")
     p_slide_edit.add_argument("new")
 
+    p_manifest_check = sub.add_parser(
+        "manifest-check",
+        help="Compare a build manifest with its source Drive folder: docs in the folder it "
+             "doesn't list, and listed docs missing from the folder.",
+    )
+    p_manifest_check.add_argument("manifest", metavar="MANIFEST_PATH")
+
     p_sheet_fetch = sub.add_parser(
         "sheet-fetch",
         help="Fetch Google Sheet metadata and optional range values.",
@@ -6039,8 +6141,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p_epub.add_argument(
         "docs",
         metavar="DOC_URL",
-        nargs="+",
-        help="One or more Google Doc URLs/IDs to include as chapters.",
+        nargs="*",
+        help="One or more Google Doc URLs/IDs to include as chapters (or use --manifest).",
+    )
+    p_epub.add_argument(
+        "--manifest",
+        metavar="PATH",
+        help="Build from a JSON manifest listing the docs in reading order, the Parts and "
+             "the book metadata, instead of DOC_URL arguments. If it names a "
+             "source_folder, the result reports any drift between the two.",
     )
     p_epub.add_argument(
         "-o", "--output",
@@ -6091,8 +6200,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p_pdf.add_argument(
         "docs",
         metavar="DOC_URL",
-        nargs="+",
-        help="One or more Google Doc URLs/IDs to include as chapters.",
+        nargs="*",
+        help="One or more Google Doc URLs/IDs to include as chapters (or use --manifest).",
+    )
+    p_pdf.add_argument(
+        "--manifest",
+        metavar="PATH",
+        help="Build from a JSON manifest listing the docs in reading order, the Parts and "
+             "the book metadata, instead of DOC_URL arguments. If it names a "
+             "source_folder, the result reports any drift between the two.",
     )
     p_pdf.add_argument(
         "-o", "--output",
@@ -6587,32 +6703,35 @@ def main() -> None:
         result = clear_review_section(args.doc)
     elif args.command == "append":
         result = append_content(args.doc, args.heading, args.text)
-    elif args.command == "build-epub":
-        result = build_epub(
-            args.docs,
-            output=args.output,
-            title=args.title,
-            subtitle=args.subtitle,
-            author=args.author,
-            cover=args.cover,
-            max_image_width=args.max_image_width,
-            optimize_images=not args.no_optimize,
-            parts=args.part,
-        )
-    elif args.command == "build-pdf":
-        result = build_pdf(
-            args.docs,
-            output=args.output,
-            title=args.title,
-            subtitle=args.subtitle,
-            author=args.author,
-            cover=args.cover,
-            max_image_width=args.max_image_width,
-            optimize_images=not args.no_optimize,
-            paper_size=args.paper_size,
-            keep_epub=args.keep_epub,
-            parts=args.part,
-        )
+    elif args.command in ("build-epub", "build-pdf"):
+        if args.manifest and args.docs:
+            parser.error("pass DOC_URL arguments or --manifest, not both")
+        if not args.manifest and not args.docs:
+            parser.error("pass one or more DOC_URL arguments, or --manifest")
+        drift = None
+        if args.manifest:
+            kwargs, drift = _build_args_from_manifest(
+                args.manifest, "epub" if args.command == "build-epub" else "pdf")
+            # Explicit flags override the manifest.
+            for flag in ("output", "title", "subtitle", "author", "cover"):
+                if getattr(args, flag):
+                    kwargs[flag] = getattr(args, flag)
+            if args.part:
+                kwargs["parts"] = args.part
+        else:
+            kwargs = {"doc_ids_or_urls": args.docs, "output": args.output,
+                      "title": args.title, "subtitle": args.subtitle,
+                      "author": args.author, "cover": args.cover, "parts": args.part}
+        kwargs.update(max_image_width=args.max_image_width,
+                      optimize_images=not args.no_optimize)
+        if args.command == "build-epub":
+            result = build_epub(**kwargs)
+        else:
+            result = build_pdf(**kwargs, paper_size=args.paper_size, keep_epub=args.keep_epub)
+        if drift is not None:
+            result["folder_drift"] = drift
+    elif args.command == "manifest-check":
+        result = manifest_check(args.manifest)
     elif args.command == "review-copy":
         result = make_review_copy(
             args.doc,

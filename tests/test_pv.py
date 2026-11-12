@@ -13,6 +13,7 @@ from PIL import Image
 import pv
 from pv import (
     _RUNAWAY_TOLERANCE,
+    ManifestError,
     SlideDrawError,
     _assign_parts,
     _block_html,
@@ -62,6 +63,8 @@ from pv import (
     _italic_runs_past_term,
     _italic_spans,
     _link_plan,
+    _load_manifest,
+    _manifest_drift,
     _map_comments,
     _media_extension,
     _named_style_for_level,
@@ -3340,3 +3343,48 @@ def test_inline_object_index_finds_the_image_element():
     assert _inline_object_index(doc, "i.7") == 40
     with pytest.raises(ValueError):
         _inline_object_index(doc, "i.99")
+
+
+def _manifest():
+    return {"title": "Book", "output_stem": "dist/book-{date}",
+            "docs": [{"title": "Preface", "id": "docAAAAA1"}, {"title": "Ch 1", "id": "docBBBBB2"},
+                     {"title": "Thanks", "id": "docCCCCC3"}],
+            "parts": [{"title": "Part I", "start": "docBBBBB2"},
+                      {"title": "", "start": "docCCCCC3"}]}
+
+
+def test_load_manifest_gives_docs_in_order_parts_and_dated_output():
+    m = _load_manifest(_manifest(), "20261112")
+    assert m["docs"] == ["docAAAAA1", "docBBBBB2", "docCCCCC3"]
+    assert m["parts"] == ["Part I=docBBBBB2", "=docCCCCC3"]
+    assert m["output_stem"] == "dist/book-20261112"
+
+
+def test_load_manifest_refuses_a_doc_listed_twice():
+    data = _manifest()
+    data["docs"].append({"title": "Ch 1 again", "id": "docBBBBB2"})
+    with pytest.raises(ManifestError, match="more than once"):
+        _load_manifest(data, "20261112")
+
+
+def test_load_manifest_refuses_a_part_starting_at_an_unlisted_doc():
+    data = _manifest()
+    data["parts"][0]["start"] = "docZZZZZ9"
+    with pytest.raises(ManifestError, match="doesn't list"):
+        _load_manifest(data, "20261112")
+
+
+def test_manifest_drift_reports_strays_and_missing_docs_but_ignores_meta_docs():
+    folder = [{"id": "docAAAAA1", "name": "Preface"},
+              {"id": "docOLD0009", "name": "Chapter 09_pre_SG"},
+              {"id": "docTOC0000", "name": "Table of Contents"}]
+    drift = _manifest_drift(["docAAAAA1", "docBBBBB2"], folder, ["Table of Contents"])
+    assert not drift["clean"]
+    assert drift["in_folder_not_in_manifest"] == [{"id": "docOLD0009", "name": "Chapter 09_pre_SG"}]
+    assert drift["in_manifest_not_in_folder"] == ["docBBBBB2"]
+
+
+def test_parser_accepts_build_from_manifest_and_manifest_check():
+    args = _build_parser().parse_args(["build-epub", "--manifest", "book.json"])
+    assert args.manifest == "book.json" and args.docs == []
+    assert _build_parser().parse_args(["manifest-check", "book.json"]).manifest == "book.json"

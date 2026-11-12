@@ -95,6 +95,9 @@ pv table <doc-url> <anchor> <rows-json>     # insert a table next to an anchor (
 pv table-update <doc-url> <anchor> <rows-json>  # rewrite an existing table's cells, keeping its shape
 pv build-epub <doc-url> <doc-url> ...       # build an EPUB (figures preserved) into dist/ with a date suffix
 pv build-pdf <doc-url> <doc-url> ...        # build a paginated PDF (needs Calibre's ebook-convert) into dist/
+pv build-epub --manifest <book.json> / pv build-pdf --manifest <book.json>
+                                                  # build from a manifest: docs in reading order, Parts, metadata; reports folder drift
+pv manifest-check <book.json>                            # docs in the source folder the manifest doesn't list, and vice versa
 pv upload <local-path> <folder-url>         # upload a local file (e.g. a built EPUB/PDF) into a Drive folder
 #
 # Run `pv -h` or `pv <command> -h` for the full command list.
