@@ -10,3 +10,7 @@ dist/
 .playwright-mcp/
 # stray figure screenshots dropped in the repo root (book content, not tool code)
 /*.png
+
+# Local secrets and per-machine environment
+*.secret
+.envrc
