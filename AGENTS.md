@@ -273,6 +273,10 @@ Consequences:
   recoverable through the API.
 - Resolve as you go. A comment you have addressed should be resolved in the same pass, or it
   becomes an invisible open item that neither of you can see in the document.
+- Say what changed when you resolve: `pv resolve <doc> <id> --reply TEXT` posts the explanation
+  and the resolution as one reply. A reply can't be edited or deleted through `pv` (or, for the
+  author, always in the Docs UI), so read the thread with `pv comments` before posting. On
+  2026-11-12 Ch 3's Polanyi thread ended up with the same reply twice.
 
 
 When working through review notes (PV bullets or sidebar comments), classify each into one of three tiers and act accordingly:
