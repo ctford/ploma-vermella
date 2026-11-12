@@ -315,7 +315,7 @@ When a piece of feedback becomes a rule, in the same pass:
 of the figure slides are pasted pictures, many of them image-model redraws, so their labels can't
 be corrected and drift from the text. `pv slide-draw` builds a slide from a JSON spec of shapes
 (`box`, `rect`, `circle`, `text`) and connectors (`arrow`, `line`, with `via` waypoints for elbows),
-positioned in points on the 720 × 405 slide, and attaches arrow ends to shape edges (`"cmp.right"`).
+positioned in points on the 720 × 405 slide (1 pt lines by default, heavier than the decks' usual 0.75 so arrowheads read in print), and attaches arrow ends to shape edges (`"cmp.right"`).
 It enforces the two things that matter for print: **every color must be a neutral gray** (a hue
 is refused, because the print book is black and white), text no lighter than `#555555` and any
 fill behind text no darker than `#CCCCCC`; and **one font family per slide**, set once at the top

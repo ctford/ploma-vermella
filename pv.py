@@ -3675,7 +3675,7 @@ _EMU_PER_PT = 12700
 _SLIDE_DRAW_DEFAULT_FONT = "Arial"  # what the native figure slides use (225 runs v 18 Inter)
 _SLIDE_DRAW_FONT_SIZES = (8, 10, 12, 14, 18)
 _SLIDE_DRAW_DEFAULT_SIZE = 12
-_SLIDE_DRAW_DEFAULT_STROKE_PT = 0.75  # 9525 EMU, the most common line weight in the decks
+_SLIDE_DRAW_DEFAULT_STROKE_PT = 1.0  # up from the decks' usual 0.75 so arrowheads read in print
 _SLIDE_DRAW_SHAPES = {
     "box": "ROUND_RECTANGLE",
     "rect": "RECTANGLE",
