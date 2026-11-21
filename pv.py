@@ -1084,6 +1084,78 @@ def _link_plan(
     return {"kind": "ok", "requests": requests, "spans": spans}
 
 
+# A quote opens after the start of a paragraph, whitespace, an opening bracket, a dash
+# or another opening quote; anywhere else it closes. A ' between letters is an
+# apostrophe, which is the closing glyph, so only an opening position gets a left quote.
+_QUOTE_OPENERS = " \t\n\u00a0([{\u2014\u2013-/\u201c\u2018"
+
+
+def _curl_quote(prev: str, char: str, nxt: str) -> str:
+    """The curly form of a straight quote, from the characters either side of it."""
+    opening = prev == "" or prev in _QUOTE_OPENERS
+    if char == '"':
+        return "\u201c" if opening else "\u201d"
+    # 'tis, '90s and the like open with an apostrophe, not a quote; rare in this book.
+    return "\u2018" if opening and nxt.isalpha() else "\u2019"
+
+
+def _curl_quotes_plan(doc: dict) -> dict:
+    """Requests that replace every straight quote in prose with its curly form.
+
+    Code paragraphs and inline monospace runs keep theirs, and so does text inside a
+    pending suggestion, which belongs to the reviewer until it is accepted. Each quote
+    is replaced in place, one character, so the styling around it is untouched.
+    Measured 2026-11-21: Sarah's accepted Ch 12 suggestions brought in 78.
+    """
+    changes = []
+
+    def walk(content):
+        for element in content:
+            if "table" in element:
+                for row in element["table"].get("tableRows", []):
+                    for cell in row.get("tableCells", []):
+                        walk(cell.get("content", []))
+                continue
+            paragraph = element.get("paragraph")
+            if not paragraph or _is_code_paragraph(element):
+                continue
+            runs = paragraph.get("elements", [])
+            text = "".join(pe.get("textRun", {}).get("content", "") for pe in runs)
+            offset = 0
+            for pe in runs:
+                run = pe.get("textRun")
+                if not run:
+                    continue
+                content_ = run.get("content", "")
+                style = run.get("textStyle", {})
+                family = style.get("weightedFontFamily", {}).get("fontFamily")
+                skip = (family in _MONOSPACE_FONTS or run.get("suggestedInsertionIds")
+                        or run.get("suggestedDeletionIds"))
+                if not skip:
+                    for k, ch in enumerate(content_):
+                        if ch not in "\"'":
+                            continue
+                        at = offset + k
+                        prev = text[at - 1] if at else ""
+                        nxt = text[at + 1] if at + 1 < len(text) else ""
+                        index = pe["startIndex"] + _utf16_len(content_[:k])
+                        changes.append((index, ch, _curl_quote(prev, ch, nxt),
+                                        text[max(0, at - 25):at + 25]))
+                offset += len(content_)
+
+    walk(doc.get("body", {}).get("content", []))
+    requests = []
+    for index, _old, new, _ctx in sorted(changes, key=lambda c: -c[0]):
+        requests.append({"deleteContentRange": {
+            "range": {"startIndex": index, "endIndex": index + 1}}})
+        requests.append({"insertText": {"location": {"index": index}, "text": new}})
+    return {
+        "requests": requests,
+        "changes": [{"index": i, "old": o, "new": n, "context": c}
+                    for i, o, n, c in sorted(changes)],
+    }
+
+
 def _unlink_plan(
     doc: dict, text: str, all_occurrences: bool = False, occurrence: int | None = None,
 ) -> dict:
@@ -5210,6 +5282,18 @@ def link_text(
     }
 
 
+def curl_quotes(doc_id_or_url: str, dry_run: bool = False) -> dict:
+    """Curl every straight quote in a doc's prose; see `_curl_quotes_plan`."""
+    doc_id = _extract_doc_id(doc_id_or_url)
+    service = _docs_service()
+    doc = service.documents().get(documentId=doc_id).execute()
+    plan = _curl_quotes_plan(doc)
+    if plan["requests"] and not dry_run:
+        _guarded_batch_update(service, doc_id, plan["requests"], doc)
+    return {"status": "dry_run" if dry_run else "curled",
+            "count": len(plan["changes"]), "changes": plan["changes"]}
+
+
 def unlink_text(
     doc_id_or_url: str, text: str, all_occurrences: bool = False,
     occurrence: int | None = None,
@@ -6589,6 +6673,12 @@ def _build_parser() -> argparse.ArgumentParser:
              "for moving or adding a code block.",
     )
 
+    p_curl = sub.add_parser(
+        "curl-quotes", help="Replace straight quotes in prose with curly ones.")
+    p_curl.add_argument("doc", metavar="DOC_URL")
+    p_curl.add_argument("--dry-run", action="store_true",
+                        help="List what would change without writing.")
+
     p_unlink = sub.add_parser(
         "unlink", help="Remove the hyperlink (and its color and underline) from a span.")
     p_unlink.add_argument("doc", metavar="DOC_URL")
@@ -6914,6 +7004,8 @@ def main() -> None:
             allow_multiple=args.allow_multiple, occurrence=args.occurrence,
             code=args.code,
         )
+    elif args.command == "curl-quotes":
+        result = curl_quotes(args.doc, dry_run=args.dry_run)
     elif args.command == "unlink":
         result = unlink_text(
             args.doc, args.text,

@@ -3474,3 +3474,27 @@ def test_unlink_plan_clears_link_color_and_underline():
 def test_unlink_plan_missing_text_is_ambiguous():
     plan = _unlink_plan(_fake_doc(_para(1, "hello\n")), "zzz")
     assert plan["kind"] == "ambiguous"
+
+
+def test_curl_quote_opens_and_closes_by_position():
+    assert pv._curl_quote("", '"', "A") == "\u201c"
+    assert pv._curl_quote(" ", '"', "d") == "\u201c"
+    assert pv._curl_quote(".", '"', " ") == "\u201d"
+    assert pv._curl_quote("t", "'", "s") == "\u2019"
+    assert pv._curl_quote(" ", "'", "d") == "\u2018"
+    assert pv._curl_quote("s", "'", " ") == "\u2019"
+
+
+def test_curl_quotes_plan_replaces_in_prose_and_skips_code():
+    prose = _para(1, 'It\'s a "dying forest."\n')
+    end = 1 + len('It\'s a "dying forest."\n')
+    code = {"startIndex": end, "endIndex": end + 12, "paragraph": {"elements": [{
+        "startIndex": end, "endIndex": end + 12,
+        "textRun": {"content": '{"a": "b"}\n',
+                    "textStyle": {"weightedFontFamily": {"fontFamily": "Courier New"}}},
+    }]}}
+    plan = pv._curl_quotes_plan(_fake_doc(prose, code))
+    assert [(c["old"], c["new"]) for c in plan["changes"]] == [
+        ("'", "\u2019"), ('"', "\u201c"), ('"', "\u201d")]
+    first = plan["requests"][0]["deleteContentRange"]["range"]["startIndex"]
+    assert first == 22  # last quote first, so earlier indices stay valid
