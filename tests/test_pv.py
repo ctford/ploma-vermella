@@ -3075,6 +3075,34 @@ def test_contraction_share_ignores_words_that_merely_contain_the_forms():
     assert check["value"].startswith("100%")
 
 
+def test_straight_quotes_flags_straight_apostrophes_and_double_quotes():
+    text = "It's a \"dying forest.\" That’s fine. “Curly” is fine."
+    check = _check_named(pv._prose_text_checks(text), "straight_quotes")
+    assert check["status"] == "review"
+    assert check["value"] == 3
+
+
+def test_straight_quotes_passes_curly_prose_and_ignores_code_outside_prose():
+    text = 'It’s a “dying forest.”\n{"type": "box"}'
+    checks = pv._prose_text_checks(text, prose="It’s a “dying forest.”")
+    check = _check_named(checks, "straight_quotes")
+    assert check["status"] == "ok"
+    assert check["value"] == 0
+
+
+def test_so_openers_flags_throat_clearing_so():
+    text = "Agents are cheap. So the harness matters. So, what next? It works."
+    check = _check_named(pv._prose_text_checks(text), "so_openers")
+    assert check["status"] == "review"
+    assert check["value"] == 2
+
+
+def test_so_openers_leaves_so_long_as_and_mid_sentence_so():
+    text = "So long as it holds, fine. So far, so good. It works, so ship it. So much for that."
+    check = _check_named(pv._prose_text_checks(text), "so_openers")
+    assert check["status"] == "ok"
+
+
 def test_acronym_definitions_match_by_initials():
     text = "Track the return on investment (ROI). A distributed denial-of-service (DDoS) hits."
     defs = [(a, e) for a, e, _ in pv._acronym_definitions(text)]

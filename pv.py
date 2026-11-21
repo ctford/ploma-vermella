@@ -1965,6 +1965,17 @@ _CONTRACTED_RE = re.compile(
 )
 _CONTRACTION_SHARE_TARGET = 0.40
 
+# The house style is curly quotes throughout, and nothing counted it. Text typed into a
+# suggestion arrives straight: Sarah's Chapter 12 pass (2026-11-16) inserted 55 straight
+# apostrophes and 19 straight double quotes, and Chapter 9, accepted from the same kind
+# of pass, carried 50. Prose only, so code and JSON keep theirs.
+_STRAIGHT_QUOTE_RE = re.compile(r"[\"']")
+
+# A sentence opening on "So" is throat-clearing in this book (style guide, *Stylistic
+# Tics*). Sarah cut 8 of the 10 in Chapter 12 on 2026-11-16. "So long as", "So far" and
+# "So much" open a clause rather than clearing one, so they stand.
+_SO_OPENER_RE = re.compile(r"^\W*So\b(?!\s+(?:long|far|much)\b)")
+
 _TIC_PHRASES = (
     "in order to", "the fact that", "able to", "the extent to which",
     "the ability of", "e.g.", "i.e.", " vs ", " vs.",
@@ -2254,6 +2265,21 @@ def _prose_text_checks(
         f"{share:.0%} ({contracted} contracted, {len(uncontracted)} not)",
         f"at least {_CONTRACTION_SHARE_TARGET:.0%}; keep the full form only for stress",
         [f"{f}x{uncontracted.count(f)}" for f in commonest[:8]],
+    ))
+
+    straight = [
+        measured[max(0, m.start() - 20):m.end() + 20].replace("\n", " ")
+        for m in _STRAIGHT_QUOTE_RE.finditer(measured)
+    ]
+    checks.append(_check(
+        "straight_quotes", "ok" if not straight else "review", len(straight),
+        "0 in prose — curly quotes throughout", straight[:8],
+    ))
+
+    so_openers = [s.strip()[:60] for s in sentences if _SO_OPENER_RE.match(s)]
+    checks.append(_check(
+        "so_openers", "ok" if not so_openers else "review", len(so_openers),
+        "0 — open on the claim, not on So", so_openers[:8],
     ))
 
     # Code indentation and the " | " of a rendered table are not double spaces in prose.
@@ -2759,6 +2785,12 @@ def _prose_check_from_doc(
             "no absolute claim the reader can refute: no, nowhere, never, only",
             "every number names its base: 1% of what, for whom",
             "each it, this, otherwise and unexpected has a referent the reader can name",
+            # Sarah's Chapters 12 and 13 passes (2026-11-16). A regex can't tell a
+            # series from an appositive, or two clauses from two verbs.
+            "serial comma in every series; no comma before and/or joining two verbs",
+            "foreign words italicized, named and translated; coined verbs glossed",
+            "criticism lands on a practice, not on the people in a role",
+            "every Chapter N points at the right chapter; table emphasis has a key",
         ],
     }
 
