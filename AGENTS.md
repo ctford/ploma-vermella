@@ -111,7 +111,7 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
 .venv/bin/pv bullets <doc-url> <start> [end] [--ordered] [--remove]  # make a paragraph range a bulleted/numbered list (or strip bullets)
 .venv/bin/pv table <doc-url> <anchor> <rows-json> [--before] [--header]  # insert a table next to an anchor paragraph;
                                                        # rows-json is a list of equal-length rows, --header bolds the first
-.venv/bin/pv comment <doc-url> <quoted-text> <text>    # anchored sidebar comment
+.venv/bin/pv comment <doc-url> <quoted-text> <text> [--occurrence N]  # comment anchored to (and highlighting) the text
 .venv/bin/pv comments <doc-url> [--include-resolved]   # list comments: id, content, quoted text, resolved
 .venv/bin/pv resolve <doc-url> <comment-id> [--reply TEXT]  # resolve a comment, optionally replying to say what changed
 .venv/bin/pv resolve-all <doc-url>                     # resolve every unresolved comment
@@ -374,8 +374,9 @@ Never commit:
 `suggestionsViewMode=SUGGESTIONS_INLINE` and `includeTabsContent=true`) returns comment threads and
 each anchor's ranges, which is the only way to place comments on a doc made by *Compare documents*,
 where the Drive API's `quotedFileContent` comes back empty. The installed client library predates
-both, so call them over `AuthorizedSession`. `pv comment` and `pv note` still post unanchored sidebar
-comments via the Drive API; moving them to `insertComment` is the obvious next step.
+both, so call them over `AuthorizedSession`. **`pv comment` uses `insertComment` since 2026-11-21**, so its
+comments are anchored and highlighted (first used to carry Ch 12's open comments onto its `_SG` doc).
+`pv note` still posts unanchored sidebar comments via the Drive API.
 
 ## Setup
 

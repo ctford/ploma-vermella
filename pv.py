@@ -4773,22 +4773,58 @@ def resolve_all_comments(doc_id_or_url: str) -> dict:
     return {"status": "resolved_all", "count": len(unresolved), "comment_ids": unresolved}
 
 
-def comment_document(doc_id_or_url: str, quoted_text: str, comment: str) -> dict:
-    """Create an anchored sidebar comment with quoted-text context."""
+def _insert_comment_plan(
+    doc: dict, quoted_text: str, comment: str, occurrence: int | None = None,
+) -> dict:
+    """An `insertComment` request anchored to the one occurrence of `quoted_text`.
+
+    The Drive API's `quotedFileContent` only *labels* a comment: Docs shows it in the
+    sidebar, unanchored and unhighlighted. The Docs API's `insertComment` (found
+    2026-11-12) ties the thread to a range, so it highlights the text and moves with it.
+    Returns {"kind": "ok", "request": ..., "span": ...} or an ambiguous result.
+    """
+    matches = _find_matches(doc, quoted_text)
+    sel = _select_matches(
+        matches, False, occurrence, text=quoted_text,
+        resolution_example="pv comment <doc> <quoted-text> <comment> --occurrence 2",
+        fuzzy_options=_fuzzy_for_doc(doc, quoted_text) if not matches else None,
+    )
+    if sel["kind"] == "ambiguous":
+        return sel
+    m = sel["targets"][0]
+    span = {"startIndex": m["start_index"], "endIndex": m["end_index"]}
+    return {"kind": "ok", "span": span,
+            "request": {"insertComment": {"range": span, "content": comment}}}
+
+
+def comment_document(
+    doc_id_or_url: str, quoted_text: str, comment: str, occurrence: int | None = None,
+) -> dict:
+    """Create a comment anchored to `quoted_text`, highlighted as in the Docs editor."""
     doc_id = _extract_doc_id(doc_id_or_url)
-    created = _drive_service().comments().create(
-        fileId=doc_id,
-        body={
-            "content": comment,
-            "quotedFileContent": {"mimeType": "text/plain", "value": quoted_text},
-        },
-        fields="id,content,quotedFileContent",
-    ).execute()
+    doc = _docs_service().documents().get(documentId=doc_id).execute()
+    plan = _insert_comment_plan(doc, quoted_text, comment, occurrence=occurrence)
+    if plan["kind"] == "ambiguous":
+        return plan["result"]
+    # The installed client library predates insertComment, so call the endpoint directly.
+    body = {"requests": [plan["request"]]}
+    if doc.get("revisionId"):
+        body["writeControl"] = {"requiredRevisionId": doc["revisionId"]}
+    resp = AuthorizedSession(_get_credentials()).post(
+        f"https://docs.googleapis.com/v1/documents/{doc_id}:batchUpdate", json=body)
+    if resp.status_code in (400, 409) and "revision" in resp.text.lower():
+        raise DocumentChanged(
+            "The document changed while pv was preparing this comment, so pv refused "
+            "to write. Nothing was modified. Re-run the command.")
+    resp.raise_for_status()
+    thread = (resp.json().get("replies") or [{}])[0].get(
+        "insertComment", {}).get("commentThread", {})
     return {
         "status": "created",
-        "id": created.get("id"),
-        "content": created.get("content", ""),
-        "quoted_text": created.get("quotedFileContent", {}).get("value", ""),
+        "id": thread.get("commentId"),
+        "content": comment,
+        "quoted_text": quoted_text,
+        "span": plan["span"],
     }
 
 
@@ -6531,12 +6567,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_comment = sub.add_parser(
         "comment",
-        help="Create an anchored sidebar comment with quoted-text context.",
+        help="Create a comment anchored to (and highlighting) a span of the doc's text.",
     )
     p_comment.add_argument("doc", metavar="DOC_URL")
     p_comment.add_argument("quoted_text", metavar="QUOTED_TEXT",
                            help="Text the comment is anchored to (shown in the sidebar).")
     p_comment.add_argument("comment", metavar="COMMENT", help="Comment body text.")
+    p_comment.add_argument("--occurrence", type=int, default=None,
+                           help="Anchor to the Nth match (1-based) when the text repeats.")
 
     p_edit = sub.add_parser("edit", help="Replace text in a Google Doc body.")
     p_edit.add_argument("doc", metavar="DOC_URL")
@@ -6974,7 +7012,8 @@ def main() -> None:
     elif args.command == "resolve-all":
         result = resolve_all_comments(args.doc)
     elif args.command == "comment":
-        result = comment_document(args.doc, args.quoted_text, args.comment)
+        result = comment_document(args.doc, args.quoted_text, args.comment,
+                                  occurrence=args.occurrence)
     elif args.command == "edit":
         result = edit_document(
             args.doc, args.old, args.new,

@@ -3498,3 +3498,15 @@ def test_curl_quotes_plan_replaces_in_prose_and_skips_code():
         ("'", "\u2019"), ('"', "\u201c"), ('"', "\u201d")]
     first = plan["requests"][0]["deleteContentRange"]["range"]["startIndex"]
     assert first == 22  # last quote first, so earlier indices stay valid
+
+
+def test_insert_comment_plan_anchors_to_the_match():
+    doc = _fake_doc(_para(1, "A harness nobody maintains is a liability.\n"))
+    plan = pv._insert_comment_plan(doc, "a liability", "TODO: say more")
+    assert plan["request"] == {"insertComment": {
+        "range": {"startIndex": 31, "endIndex": 42}, "content": "TODO: say more"}}
+
+
+def test_insert_comment_plan_missing_text_is_ambiguous():
+    plan = pv._insert_comment_plan(_fake_doc(_para(1, "hello\n")), "zzz", "x")
+    assert plan["kind"] == "ambiguous"
