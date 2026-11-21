@@ -3445,3 +3445,17 @@ def test_slide_draw_refuses_a_zero_length_segment():
         _slide_draw_plan({"elements": [
             {"id": "a", "type": "box", "x": 0, "y": 0, "w": 50, "h": 20},
             {"id": "z", "type": "arrow", "from": [50, 10], "to": "a.right"}]}, "p", "pvtest")
+
+
+def test_hyphenated_prefixes_flags_the_oreilly_eight():
+    text = "Re-derive it: a multi-agent setup with sub-agents and co-authors is non-trivial."
+    check = _check_named(pv._prose_text_checks(text), "hyphenated_prefixes")
+    assert check["status"] == "review"
+    assert check["value"] == 5
+
+
+def test_hyphenated_prefixes_keeps_proper_nouns_word_list_and_doubled_letters():
+    text = ("A non-AI tool, a pre-2020 build, a co-class, a pseudo-tty. "
+            "Re-create it, re-sign it, a multi-instance meta-analysis, a co-op.")
+    check = _check_named(pv._prose_text_checks(text), "hyphenated_prefixes")
+    assert check["status"] == "ok", check["detail"]

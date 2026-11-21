@@ -1979,6 +1979,20 @@ _STRAIGHT_QUOTE_RE = re.compile(r"[\"']")
 # "So much" open a clause rather than clearing one, so they stand.
 _SO_OPENER_RE = re.compile(r"^\W*So\b(?!\s+(?:long|far|much)\b)")
 
+# O'Reilly closes up eight prefixes "unless part of a proper noun" (house style guide),
+# so a hyphen before a capital or a digit stands: non-AI, pre-2020. The exceptions are
+# O'Reilly's word list (co-class, pseudo-tty, re-create, re-identification), words whose
+# closed form is a different word (Chicago), and a doubled a or i at the join, which
+# Chicago keeps hyphenated (multi-instance). Anything else that reads badly closed up
+# (non-software) is the reader's call, so this reports rather than rewrites.
+_CLOSED_PREFIX_RE = re.compile(r"\b((?i:micro|meta|multi|pseudo|re|non|sub|co))-([a-z][\w-]*)")
+_HYPHENATED_PREFIX_KEEP = frozenset((
+    "co-class", "pseudo-tty", "re-create", "re-created", "re-creates", "re-creating",
+    "re-identification", "co-op", "re-sign", "re-signed", "re-cover", "re-form",
+    "re-press", "re-treat", "re-collect", "re-count", "re-mark", "re-lease",
+    "meta-analysis", "meta-analyses",
+))
+
 _TIC_PHRASES = (
     "in order to", "the fact that", "able to", "the extent to which",
     "the ability of", "e.g.", "i.e.", " vs ", " vs.",
@@ -2283,6 +2297,20 @@ def _prose_text_checks(
     checks.append(_check(
         "so_openers", "ok" if not so_openers else "review", len(so_openers),
         "0 — open on the claim, not on So", so_openers[:8],
+    ))
+
+    hyphenated = []
+    for m in _CLOSED_PREFIX_RE.finditer(measured):
+        word = m.group(0).lower()
+        if word in _HYPHENATED_PREFIX_KEEP:
+            continue
+        if m.group(1)[-1].lower() in "ai" and m.group(2)[0] == m.group(1)[-1].lower():
+            continue
+        hyphenated.append(m.group(0))
+    checks.append(_check(
+        "hyphenated_prefixes", "ok" if not hyphenated else "review", len(hyphenated),
+        "0 — close up micro, meta, multi, pseudo, re, non, sub, co",
+        sorted(set(hyphenated))[:12],
     ))
 
     # Code indentation and the " | " of a rendered table are not double spaces in prose.
