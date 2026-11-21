@@ -87,6 +87,7 @@ pv insert-after <doc-url> <anchor> <text>   # insert paragraph(s) after an ancho
 pv insert-after <doc-url> <anchor> <text> --code   # ...as a code block, in the doc's monospace font
 pv insert-before <doc-url> <anchor> <text>  # insert paragraph(s) before an anchor paragraph
 pv link <doc-url> <text> <url>              # hyperlink a span of text, in the house red
+pv unlink <doc-url> <text>                  # take a link (and its color and underline) off a span
 pv cite <doc-url> <title> <url>             # italicize + hyperlink a work title (citation)
                                             # both take --color HEX, or --no-color for default blue
 pv heading <doc-url> <anchor> <level>       # set a paragraph's style (1-6, normal, title)

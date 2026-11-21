@@ -1084,6 +1084,36 @@ def _link_plan(
     return {"kind": "ok", "requests": requests, "spans": spans}
 
 
+def _unlink_plan(
+    doc: dict, text: str, all_occurrences: bool = False, occurrence: int | None = None,
+) -> dict:
+    """Build updateTextStyle requests that take the hyperlink off occurrences of `text`.
+
+    Clears the link and the color and underline a link brings with it, so the span
+    goes back to body text. Matches the same way `_link_plan` does, so the fix for a
+    link that ran wide (`she places in the middle loop`) is `unlink` on the extra words.
+    """
+    matches = _find_matches(doc, text)
+    sel = _select_matches(
+        matches, all_occurrences, occurrence, text=text,
+        resolution_example="pv unlink <doc> <text> --occurrence 2",
+        fuzzy_options=_fuzzy_for_doc(doc, text) if not matches else None,
+    )
+    if sel["kind"] == "ambiguous":
+        return sel
+    targets = sel["targets"]
+    requests = [
+        {"updateTextStyle": {
+            "range": {"startIndex": m["start_index"], "endIndex": m["end_index"]},
+            "textStyle": {},
+            "fields": "link,foregroundColor,underline",
+        }}
+        for m in targets
+    ]
+    spans = [{"start_index": m["start_index"], "end_index": m["end_index"]} for m in targets]
+    return {"kind": "ok", "requests": requests, "spans": spans}
+
+
 def _cite_plan(
     doc: dict, title: str, url: str, all_occurrences: bool = False,
     occurrence: int | None = None, color: str | None = _LINK_COLOR,
@@ -5180,6 +5210,22 @@ def link_text(
     }
 
 
+def unlink_text(
+    doc_id_or_url: str, text: str, all_occurrences: bool = False,
+    occurrence: int | None = None,
+) -> dict:
+    """Remove the hyperlink from occurrences of `text`; see `_unlink_plan`."""
+    doc_id = _extract_doc_id(doc_id_or_url)
+    service = _docs_service()
+    doc = service.documents().get(documentId=doc_id).execute()
+    plan = _unlink_plan(doc, text, all_occurrences=all_occurrences, occurrence=occurrence)
+    if plan["kind"] == "ambiguous":
+        return plan["result"]
+    _guarded_batch_update(service, doc_id, plan["requests"], doc)
+    return {"status": "unlinked", "text": text, "occurrences": len(plan["spans"]),
+            "spans": plan["spans"]}
+
+
 def cite_text(
     doc_id_or_url: str, title: str, url: str, all_occurrences: bool = False,
     occurrence: int | None = None, color: str | None = _LINK_COLOR,
@@ -6543,6 +6589,15 @@ def _build_parser() -> argparse.ArgumentParser:
              "for moving or adding a code block.",
     )
 
+    p_unlink = sub.add_parser(
+        "unlink", help="Remove the hyperlink (and its color and underline) from a span.")
+    p_unlink.add_argument("doc", metavar="DOC_URL")
+    p_unlink.add_argument("text", metavar="TEXT", help="Exact span to unlink.")
+    p_unlink.add_argument("--all", action="store_true", dest="all_occurrences",
+                          help="Unlink every occurrence. Default: require exactly one match.")
+    p_unlink.add_argument("--occurrence", type=int, default=None,
+                          help="Unlink the Nth match (1-based) when TEXT matches several places.")
+
     p_link = sub.add_parser("link", help="Hyperlink a span of text in a doc.")
     p_link.add_argument("doc", metavar="DOC_URL")
     p_link.add_argument("text", metavar="TEXT", help="Exact span to hyperlink.")
@@ -6858,6 +6913,11 @@ def main() -> None:
             args.doc, args.anchor, args.text,
             allow_multiple=args.allow_multiple, occurrence=args.occurrence,
             code=args.code,
+        )
+    elif args.command == "unlink":
+        result = unlink_text(
+            args.doc, args.text,
+            all_occurrences=args.all_occurrences, occurrence=args.occurrence,
         )
     elif args.command == "link":
         result = link_text(

@@ -111,6 +111,7 @@ from pv import (
     _title_page_xhtml,
     _toc_entries_html,
     _toc_page_xhtml,
+    _unlink_plan,
     _utf16_len,
     _word_count_summary,
     main,
@@ -3459,3 +3460,17 @@ def test_hyphenated_prefixes_keeps_proper_nouns_word_list_and_doubled_letters():
             "Re-create it, re-sign it, a multi-instance meta-analysis, a co-op.")
     check = _check_named(pv._prose_text_checks(text), "hyphenated_prefixes")
     assert check["status"] == "ok", check["detail"]
+
+
+def test_unlink_plan_clears_link_color_and_underline():
+    doc = _fake_doc(_para(1, "which she places in the middle loop.\n"))
+    plan = _unlink_plan(doc, "she places in ")
+    req = plan["requests"][0]["updateTextStyle"]
+    assert req["range"] == {"startIndex": 7, "endIndex": 21}
+    assert req["textStyle"] == {}
+    assert req["fields"] == "link,foregroundColor,underline"
+
+
+def test_unlink_plan_missing_text_is_ambiguous():
+    plan = _unlink_plan(_fake_doc(_para(1, "hello\n")), "zzz")
+    assert plan["kind"] == "ambiguous"
