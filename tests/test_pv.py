@@ -1982,6 +1982,14 @@ def test_prose_text_checks_em_dash_density_flags_only_crowding():
     assert _named(_prose_text_checks(none_at_all), "em_dash_density")["status"] == "ok"
 
 
+def test_em_dash_density_budget_is_one_per_250_words():
+    """Tightened 2026-11-21: 1 per 200 used to pass, and is now crowded."""
+    one_per_200 = " ".join(["word"] * 200) + " — one aside."
+    assert _named(_prose_text_checks(one_per_200), "em_dash_density")["status"] == "review"
+    one_per_260 = " ".join(["word"] * 260) + " — one aside."
+    assert _named(_prose_text_checks(one_per_260), "em_dash_density")["status"] == "ok"
+
+
 def test_sentences_do_not_run_across_paragraph_breaks():
     """Fragment bullets take no full stop, so a list must not read as one sentence."""
     bullets = "\n".join(f"A bullet item number {i} without a full stop" for i in range(1, 7))

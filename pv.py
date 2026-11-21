@@ -1791,7 +1791,10 @@ _UNAPPLIED_STATUSES = frozenset({"ambiguous", "not_found", "no_match"})
 _SENTENCE_SPLIT = re.compile(r"""(?<=[.!?])(?:\]\([^)]*\))?["'\u201d\u2019)\]]*\s+""")
 _LONG_SENTENCE_WORDS = 35
 _SENTENCE_MEAN_TARGET = (20.0, 24.0)
-_EM_DASH_WORDS_PER = 150
+# Tightened from 150 on 2026-11-21 (author's call). Sarah took Ch 9 to 1 per 336 and
+# Ch 12 to 1 per 506 in her 2026-11 passes, and her finished chapters run 1 per 209-499.
+# Neither O'Reilly nor Chicago sets a rate; this is house style.
+_EM_DASH_WORDS_PER = 250
 _PARAGRAPH_MAX_WORDS = 120
 _SENTENCE_MAX_WORDS = 45
 # A tolerance, not a ceiling: runaway sentences and paragraphs stay under this rate
