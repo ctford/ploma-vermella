@@ -102,7 +102,7 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
 .venv/bin/pv cite <doc-url> <title> <url> [--all] [--color HEX|--no-color] # italicize + hyperlink a work title
                                                        # links are set in the O'Reilly red (d3002d) by default,
                                                        # not the default blue; --no-color opts out
-.venv/bin/pv style <doc-url> <text> [--italic|--bold|--underline|--no-italic|--no-bold|--no-underline|--color HEX] [--all]  # character styling (turn styles on, or off with --no-*)
+.venv/bin/pv style <doc-url> <text> [--italic|--bold|--underline|--no-italic|--no-bold|--no-underline|--color HEX|--no-color] [--all]  # character styling (turn styles on, or off with --no-*)
 .venv/bin/pv style <doc-url> <text> --monospace [FONT]  # set a span in a monospace family; bare --monospace
                                                        # uses the family the doc already uses for code. Repairs a code
                                                        # line whose first character lost its typeface — Docs does this,

@@ -1019,6 +1019,10 @@ def _style_plan(
     if color:
         style["foregroundColor"] = {"color": {"rgbColor": _parse_hex_color(color)}}
         fields.append("foregroundColor")
+    elif color == "":
+        # An empty color clears it back to the paragraph's default: naming the field
+        # in the mask without a value resets it.
+        fields.append("foregroundColor")
     if monospace:
         style["weightedFontFamily"] = {"fontFamily": monospace}
         fields.append("weightedFontFamily")
@@ -6764,6 +6768,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_style.add_argument("--no-bold", action="store_true", help="Turn bold off.")
     p_style.add_argument("--no-underline", action="store_true", help="Turn underline off.")
     p_style.add_argument("--color", metavar="HEX", help="Foreground color, e.g. #d3002d.")
+    p_style.add_argument("--no-color", action="store_true",
+                         help="Clear the foreground color back to the default.")
     p_style.add_argument(
         "--monospace",
         nargs="?",
@@ -7063,7 +7069,8 @@ def main() -> None:
             italic=tri(args.italic, args.no_italic),
             bold=tri(args.bold, args.no_bold),
             underline=tri(args.underline, args.no_underline),
-            color=args.color, all_occurrences=args.all_occurrences, occurrence=args.occurrence,
+            color="" if args.no_color else args.color,
+            all_occurrences=args.all_occurrences, occurrence=args.occurrence,
         )
     elif args.command == "cite":
         result = cite_text(

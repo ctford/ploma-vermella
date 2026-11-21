@@ -3510,3 +3510,11 @@ def test_insert_comment_plan_anchors_to_the_match():
 def test_insert_comment_plan_missing_text_is_ambiguous():
     plan = pv._insert_comment_plan(_fake_doc(_para(1, "hello\n")), "zzz", "x")
     assert plan["kind"] == "ambiguous"
+
+
+def test_style_plan_empty_color_clears_it():
+    doc = _fake_doc(_para(1, "Modularity 1, 7\n"))
+    plan = _style_plan(doc, "1, 7", bold=False, color="")
+    req = plan["requests"][0]["updateTextStyle"]
+    assert req["textStyle"] == {"bold": False}
+    assert req["fields"] == "bold,foregroundColor"
