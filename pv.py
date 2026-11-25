@@ -2208,6 +2208,110 @@ def _inclusive_we(text: str) -> tuple[int, list[str]]:
     return len(matches), samples
 
 
+# Sentence shapes that read as machine-drafted. Measured 2026-11-24 against one author's
+# speech (100k words) and posts (10k words): each ran at two to eight times the author's
+# own rate in the manuscript, and the worst passages carried several at once. They are
+# shapes, not banned words, so they're reported with context for a reader to judge.
+# Deliberately left out: "not X, it's Y" and intensifiers, which the author uses as much
+# when speaking as the manuscript does.
+_REGISTER_SHAPES: tuple[tuple[str, re.Pattern], ...] = (
+    ("cleft opener", re.compile(r"^\W*What [a-z][^.?]{2,60}? (?:is|are)\b")),
+    ("is-what", re.compile(r"\b(?:is|are|was) what (?:makes|lets|turns|gives|keeps)\b", re.I)),
+    ("signpost", re.compile(
+        r"\b(?:that|this)(?:'s|’s| is) (?:why|what|where|how)\b|\bcomes? in\.$", re.I)),
+    ("colon payoff", re.compile(r":\s+[a-z][^.;:]{1,40}\.$")),
+    ("abstract verb", re.compile(
+        r"\b(?:matters|remains|holds|survives|earns|pays off|sits|lives|lands)\b", re.I)),
+    ("abstract subject", re.compile(
+        r"^The (?:\w+ ){0,2}(?:of|behind) [^,]{3,40}? (?:is|are) that\b")),
+)
+# A shaped sentence whose word pairs the author has used less than half the time is
+# reported even when it stands alone in its paragraph.
+_REGISTER_SPOKEN_FLOOR = 0.5
+_REGISTER_EPIGRAM_RE = re.compile(r"\b(?:is|are|was|isn't|aren't)\b")
+_VOICE_WORD_RE = re.compile(r"[a-z]+(?:'[a-z]+)?")
+_VOICE_STOPWORDS = frozenset(
+    "the a an of to and in is it that for on as with be by this are or you your can at "
+    "from not but they their its was have has what if when than which so i we do one "
+    "there about how will all also into these those them it's don't some just like".split()
+)
+
+
+def _voice_pairs(text: str) -> set[tuple[str, str]]:
+    """Word pairs from a text, minus pairs made only of function words."""
+    words = _VOICE_WORD_RE.findall(_normalize_quotes(text).lower())
+    return {
+        (a, b) for a, b in zip(words, words[1:])
+        if not (a in _VOICE_STOPWORDS and b in _VOICE_STOPWORDS)
+    }
+
+
+def _load_voice(paths: list[str]) -> set[tuple[str, str]]:
+    """Word pairs from the author's own text: files, or directories of files.
+
+    Transcripts arrive as WebVTT, so cue numbers, timings and the speaker's name are
+    stripped; the words are what count. Markdown and plain text are read as they are.
+    """
+    pairs: set[tuple[str, str]] = set()
+    for path in paths:
+        files = (
+            sorted(str(p) for p in Path(path).iterdir() if p.is_file())
+            if Path(path).is_dir() else [path]
+        )
+        for name in files:
+            lines = []
+            with open(name, encoding="utf-8", errors="ignore") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line or line == "WEBVTT" or line.isdigit() or "-->" in line:
+                        continue
+                    lines.append(re.sub(r"^[A-Z][\w'-]+(?: [A-Z][\w'-]+)?:\s+", "", line))
+            pairs |= _voice_pairs(" ".join(lines))
+    return pairs
+
+
+def _machine_register(
+    prose: str, voice: set[tuple[str, str]] | None = None,
+) -> tuple[list[dict], int]:
+    """Sentences with machine-register shapes, worst paragraphs first.
+
+    Each finding names its shapes, its paragraph's total, and — given the author's own
+    text — a spoken score: the share of the sentence's word pairs the author has used.
+    A low score with a shape is a candidate; a high one means the author talks that way.
+    A low score alone proves nothing: on 2026-11-24 a zero-scoring sentence turned out
+    to be the author's own rewrite. Returns the findings and the count of paragraphs
+    with two or more shapes, which is the strongest signal.
+    """
+    findings: list[dict] = []
+    clustered = 0
+    for paragraph in prose.split("\n"):
+        sentences = [s.strip() for s in _SENTENCE_SPLIT.split(paragraph) if s.strip()]
+        local = []
+        for i, sentence in enumerate(sentences):
+            plain = _normalize_quotes(sentence)
+            shapes = [name for name, rx in _REGISTER_SHAPES if rx.search(plain)]
+            halves = plain.split(";")
+            if len(halves) == 2 and len(plain.split()) <= 30 and abs(
+                len(halves[0].split()) - len(halves[1].split())
+            ) <= 4:
+                shapes.append("balanced pair")
+            if (i == len(sentences) - 1 and len(sentences) > 2
+                    and len(plain.split()) <= 9 and _REGISTER_EPIGRAM_RE.search(plain)):
+                shapes.append("epigram closer")
+            if shapes:
+                local.append({"sentence": sentence, "shapes": shapes})
+        total = sum(len(f["shapes"]) for f in local)
+        clustered += total >= 2
+        for f in local:
+            f["paragraph_shapes"] = total
+            if voice is not None:
+                pairs = _voice_pairs(f["sentence"])
+                f["spoken"] = round(len(pairs & voice) / len(pairs), 2) if pairs else 1.0
+        findings.extend(local)
+    findings.sort(key=lambda f: (-f["paragraph_shapes"], f.get("spoken", 0.0)))
+    return findings, clustered
+
+
 def _harness_role_case(text: str) -> list[str]:
     """Enumerations of the four harness roles that lowercase one or more of them.
 
@@ -2254,6 +2358,7 @@ def _referenced_figures(text: str) -> set[str]:
 
 def _prose_text_checks(
     text: str, phrases: list[str] | None = None, prose: str | None = None,
+    voice: set[tuple[str, str]] | None = None,
 ) -> list[dict]:
     """Character-level checks: length, density, and greppable house style.
 
@@ -2458,6 +2563,30 @@ def _prose_text_checks(
             "flagged_phrases", "ok" if not hits else "review", len(hits),
             "0 — the work's banned-phrase list", hits[:30],
         ))
+
+    findings, clustered = _machine_register(measured, voice)
+    candidates = [
+        f for f in findings
+        if f["paragraph_shapes"] >= 2 or f.get("spoken", 0.0) < _REGISTER_SPOKEN_FLOOR
+    ]
+    checks.append(_check(
+        "machine_register", "ok" if not clustered else "review",
+        f"{len(findings)} sentences, {clustered} paragraphs with 2+ shapes",
+        "report only — read each; rewrite the ones that aren't in the author's voice",
+        [
+            f"[{', '.join(f['shapes'])}; paragraph {f['paragraph_shapes']}"
+            + (f"; spoken {f['spoken']:.2f}" if "spoken" in f else "")
+            + f"] {f['sentence'][:200]}"
+            for f in candidates[:20]
+        ],
+    ))
+    per_1000 = 1000 / word_count if word_count else 0.0
+    checks.append(_check(
+        "register_rates", "ok",
+        f"semicolons {measured.count(';') * per_1000:.2f}, "
+        f"em-dashes {measured.count('—') * per_1000:.2f} per 1,000 words",
+        "compare with the author's own rates (the work's llm-speak-detection.md)",
+    ))
     return checks
 
 
@@ -2888,11 +3017,12 @@ def _prose_structure_checks(
 def _prose_check_from_doc(
     doc: dict, terms: list[tuple[str, str | None]] | None = None,
     chapter: str | None = None, phrases: list[str] | None = None,
+    voice: set[tuple[str, str]] | None = None,
 ) -> dict:
     """Run the mechanical half of the pre-submission sweep over a document."""
     text = _extract_text(doc)
     prose = _prose_text(doc)
-    checks = (_prose_text_checks(text, phrases, prose=prose)
+    checks = (_prose_text_checks(text, phrases, prose=prose, voice=voice)
               + _prose_structure_checks(doc, text, terms, chapter))
     # The denominators behind the rates above. Surfaced because a whole-manuscript
     # figure has to be re-weighted across chapters, not averaged from the per-chapter
@@ -5152,7 +5282,7 @@ def word_count(target: str, exclude=None) -> dict:
 
 def prose_check(
     doc_id_or_url: str, terms_path: str | None = None, chapter: str | None = None,
-    phrases_path: str | None = None,
+    phrases_path: str | None = None, voice_paths: list[str] | None = None,
 ) -> dict:
     """Run the mechanical pre-submission sweep over a chapter.
 
@@ -5164,7 +5294,11 @@ def prose_check(
     `terms_path` points at a list of the work's terms of art, one per line, each
     optionally `term = CHAPTER` naming the chapter that introduces it. `chapter` says
     which chapter this document is, so terms introduced elsewhere are checked for the
-    opposite: they should be plain here, not italicized again."""
+    opposite: they should be plain here, not italicized again.
+
+    `voice_paths` are files or directories of the author's own words (transcripts,
+    posts). With them, `machine_register` scores each shaped sentence by how much of
+    it the author has actually said."""
     doc_id = _extract_doc_id(doc_id_or_url)
     terms = None
     if terms_path:
@@ -5177,8 +5311,9 @@ def prose_check(
                 line.strip() for line in handle
                 if line.strip() and not line.lstrip().startswith("#")
             ]
+    voice = _load_voice(voice_paths) if voice_paths else None
     doc = _read_doc_as_written(_docs_service(), doc_id)
-    return _prose_check_from_doc(doc, terms, chapter, phrases)
+    return _prose_check_from_doc(doc, terms, chapter, phrases, voice)
 
 
 def parse_table_rows(text: str) -> list[list[str]]:
@@ -6660,6 +6795,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--phrases", metavar="PATH", default=None,
         help="Newline-delimited phrases to flag (e.g. a work's LLM-speak list).",
     )
+    p_prose_check.add_argument(
+        "--voice", metavar="PATH", action="append", default=None,
+        help="The author's own words, a file or directory (repeatable): transcripts, "
+        "posts. Scores machine_register findings by how much the author has said.",
+    )
 
     p_insert_after = sub.add_parser(
         "insert-after",
@@ -7036,7 +7176,7 @@ def main() -> None:
     elif args.command == "words":
         result = word_count(args.target, args.exclude)
     elif args.command == "prose-check":
-        result = prose_check(args.doc, args.terms, args.chapter, args.phrases)
+        result = prose_check(args.doc, args.terms, args.chapter, args.phrases, args.voice)
     elif args.command == "insert-after":
         result = insert_after(
             args.doc, args.anchor, args.text,

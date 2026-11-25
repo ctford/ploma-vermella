@@ -83,12 +83,16 @@ Invoke via `.venv/bin/pv` — no need to activate the virtualenv first.
                                                        # in a folder, with a total; --exclude skips by name and reports what it skipped
 .venv/bin/pv shade <doc-url> <start> <end> [--color HEX] [--all] [--remove]  # shade a delimited
                                                        # block's paragraphs (e.g. <sidebar>…</sidebar>); --all does every pair in the doc
-.venv/bin/pv prose-check <doc-url> [--terms PATH] [--chapter CH] [--phrases PATH]  # mechanical style sweep: sentence length, em-dash density, contraction share,
+.venv/bin/pv prose-check <doc-url> [--terms PATH] [--chapter CH] [--phrases PATH] [--voice PATH ...]  # mechanical style sweep: sentence length, em-dash density, contraction share,
                                                        # passives, tics, inclusive we, harness-role case, UK forms, -ly ordinals, straight quotes, sentence-initial So, hyphenated prefixes, paragraph length, first-use italics, stacked headings, figure refs.
                                                        # --chapter scopes the italics rule per-book: a term introduced in another
                                                        # chapter should be plain here, not italicized again
                                                        # `italics_run_past_the_term` catches styling that spilled off a term into its
                                                        # definition — the damage `pv edit` used to cause (see Italics Spill below)
+                                                       # `machine_register` (report only) lists sentences with machine-drafted shapes
+                                                       # (cleft openers, semicolon pairs, signposts, colon payoffs, empty verbs),
+                                                       # clustered paragraphs first; --voice (the author's transcripts/posts, files or
+                                                       # dirs) adds a spoken score per sentence. `register_rates` gives ; and — per 1,000.
 .venv/bin/pv suggestions <doc-url>                     # list an editor's suggested edits as per-paragraph before→after deltas
                                                        # reports text AND style-only suggestions; total_suggestion_count is
                                                        # distinct IDs (matches the Docs UI), not insertions + deletions

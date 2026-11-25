@@ -3518,3 +3518,58 @@ def test_style_plan_empty_color_clears_it():
     req = plan["requests"][0]["updateTextStyle"]
     assert req["textStyle"] == {"bold": False}
     assert req["fields"] == "bold,foregroundColor"
+
+
+def test_machine_register_ranks_clustered_paragraphs_first():
+    """Several shapes in one paragraph are the strongest signal, so they lead."""
+    prose = (
+        "The tool reads the logs and writes a report for the team.\n"
+        "What matters here is the residue. The residue survives; the slop doesn't."
+        " That is why the loop works.\n"
+    )
+    findings, clustered = pv._machine_register(prose)
+    assert clustered == 1
+    assert findings[0]["paragraph_shapes"] >= 3
+    shapes = {s for f in findings for s in f["shapes"]}
+    assert {"cleft opener", "balanced pair", "signpost"} <= shapes
+
+
+def test_machine_register_leaves_the_authors_own_contrast_alone():
+    """'not X, it's Y' is as common in the author's speech, so it isn't a shape."""
+    findings, _ = pv._machine_register("It isn't a style question, it's a correctness question.\n")
+    assert findings == []
+
+
+def test_machine_register_spoken_score_comes_from_the_voice():
+    """A shaped sentence the author has said scores high; an unfamiliar one scores low."""
+    voice = pv._voice_pairs("everything the agent learns remains in the harness")
+    findings, _ = pv._machine_register(
+        "Everything the agent learns remains in the harness.\n"
+        "Provenance remains orthogonal to throughput.\n", voice,
+    )
+    scores = {f["sentence"][:10]: f["spoken"] for f in findings}
+    assert scores["Everything"] > 0.5 > scores["Provenance"]
+
+
+def test_machine_register_check_reports_only_candidates():
+    """A lone shape the author says anyway is counted but not listed for rewriting."""
+    voice = pv._voice_pairs("everything the agent learns remains in the harness")
+    checks = _prose_text_checks(
+        "Everything the agent learns remains in the harness.\n", voice=voice,
+    )
+    register = _named(checks, "machine_register")
+    assert register["status"] == "ok"
+    assert register["value"].startswith("1 sentences")
+    assert register["detail"] == []
+    assert "semicolons" in _named(checks, "register_rates")["value"]
+
+
+def test_load_voice_strips_transcript_timings_and_speaker(tmp_path):
+    """Cue numbers, timings and the speaker's name are not the author's words."""
+    (tmp_path / "talk.vtt").write_text(
+        "WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.000\nAlex Example: harness engineering matters\n",
+        encoding="utf-8",
+    )
+    pairs = pv._load_voice([str(tmp_path)])
+    assert ("harness", "engineering") in pairs
+    assert not any("alex" in p or "00" in p for p in pairs)
